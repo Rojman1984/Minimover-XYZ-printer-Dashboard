@@ -1,0 +1,9 @@
+{
+  "serialPath": "/dev/ttyUSB0",
+  "baudRate": 115200,
+  "pollIntervalMs": 500,
+  "enableWebcam": true,
+  "webcamIntervalMs": 500,
+  "webcamDevice": "/dev/video0",
+  "port": 3000
+}

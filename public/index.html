@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>miniMover Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>miniMover Dashboard</h1>
+    <div id="connection">Connecting...</div>
+  </header>
+
+  <main>
+    <section id="tiles">
+      <div class="tile" id="extruder">
+        <h2>Extruder</h2>
+        <div class="big" id="extruderTemp">-- °C</div>
+        <div id="extruderTarget">target: -- °C</div>
+      </div>
+
+      <div class="tile" id="filament">
+        <h2>Filament</h2>
+        <div class="big" id="filamentLen">-- m</div>
+        <div id="filamentName">--</div>
+      </div>
+
+      <div class="tile" id="job">
+        <h2>Job</h2>
+        <div id="jobFile">No job</div>
+        <div class="progressWrapper">
+          <div id="jobBar"></div>
+        </div>
+        <div id="jobTimes">--</div>
+      </div>
+    </section>
+
+    <section id="controls">
+      <h3>Controls</h3>
+      <div class="btnRow">
+        <button id="cal_start">Calibrate Start</button>
+        <button id="cal_lower">Lower Detector Done</button>
+        <button id="cal_raise">Raise Detector Done</button>
+      </div>
+      <div class="btnRow">
+        <button id="toggle_autolevel">Toggle Auto-Level</button>
+        <button id="pause">Pause</button>
+        <button id="resume">Resume</button>
+        <button id="cancel">Cancel</button>
+      </div>
+      <div class="btnRow">
+        <button id="home">Home</button>
+        <button id="load">Load Filament</button>
+        <button id="unload">Unload Filament</button>
+      </div>
+
+      <div class="zRow">
+        <label>Z offset: <input id="zoff" type="number" step="1" value="0"/></label>
+        <button id="setZ">Set</button>
+      </div>
+
+      <div id="log"></div>
+    </section>
+
+    <section id="camera">
+      <h3>Print Monitor</h3>
+      <div id="cameraBox">
+        <img id="camFrame" alt="camera frame" />
+      </div>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
