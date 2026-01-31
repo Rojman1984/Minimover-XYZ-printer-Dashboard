@@ -9,17 +9,39 @@ Features:
 - Optional USB webcam print monitor (low-framerate base64 images) — can be extended to MJPEG with mjpg-streamer / ffmpeg
 - Systemd service example and installer script
 
-Quick start (on Raspberry Pi):
+## Prerequisites — build & test the miniMover console (printer interface)
+
+Before using the dashboard it is strongly recommended to build and test the original miniMover console utility (the code that implements the protocol and example commands). This ensures your Pi has the correct device drivers and you can communicate with the printer over USB.
+
+The instructions below are for Debian / Raspberry Pi OS (Pi 3B+ or better recommended). Adjust package names for other distros.
+
+## 1) Install OS packages
+
+Update and install basic build tools, v4l2 utilities and related packages:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential git pkg-config libv4l-dev v4l-utils ffmpeg curl
+```
+
+## Minimover-XYZ-printer-Dashboard Quick start (on Raspberry Pi)
 
 1. Install Node (18+) on Pi (or use NodeSource packages).
 2. Add your user to dialout and video groups:
+
+```bash
    sudo usermod -a -G dialout,video $USER
    logout/login
+```
+
 3. Copy files or clone repo into ~/minimover-dashboard
 4. Install deps:
-   npm install
-   // optional (webcam & serial):
+
+```bash
+   npm install // optional (webcam & serial)
    npm install serialport @serialport/parser-readline node-webcam
+```
+
 5. Edit config.json to set the correct serial device (/dev/ttyUSB0 or /dev/serial/by-id/...).
 6. Start:
    npm start
@@ -28,23 +50,31 @@ Quick start (on Raspberry Pi):
 Systemd service and setup script included (setup.sh and minimover-dashboard.service).
 See docs/ for further notes.
 
-## Camera streaming (mjpg-streamer)
+### Camera streaming (mjpg-streamer)
 
 For high-frame-rate monitoring (25–30 FPS) we recommend using mjpg-streamer on the Pi.
 
 Quick steps:
 
 1. Build and install mjpg-streamer (script provided):
+
+```bash
    sudo bash scripts/install_mjpg_streamer.sh
+```
 
 2. Copy the example env and enable the service:
+
+```bash
    sudo cp config/mjpg-streamer.env.example /etc/default/mjpg-streamer
+```
 
-   # Edit /etc/default/mjpg-streamer if you want to change device/res/fps
+# Edit /etc/default/mjpg-streamer if you want to change device/res/fps
 
+```bash
    sudo cp systemd/mjpg-streamer.service /etc/systemd/system/mjpg-streamer.service
    sudo systemctl daemon-reload
    sudo systemctl enable --now mjpg-streamer.service
+```
 
 3. Verify stream in a browser:
    http://<pi-ip>:8080/?action=stream
