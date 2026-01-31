@@ -1,11 +1,13 @@
 // server.js - Node bridge: serial <-> websocket + optional webcam
-// Minimal, production-ready code should add more error handling and logging.
+// Uses lib/parser.js to normalize printer messages.
 
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const http = require('http');
 const socketio = require('socket.io');
+
+const Parser = require('./lib/parser');
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const config = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE)) : {
@@ -22,83 +24,73 @@ const app = express();
 const server = http.createServer(app);
 const io = socketio(server);
 
-// serve static UI
 app.use(express.static(path.join(__dirname, 'public')));
 
-// serialport lazily loaded (optional dependency if you don't need serial)
+// instantiate parser
+const parser = new Parser();
+
+// store latest normalized status
+let latestStatus = parser._buildNormalizedStatus ? parser._buildNormalizedStatus() : { isValid: false };
+
+// wire up parser events
+parser.on('status', (st) => {
+  latestStatus = st;
+  io.emit('status', st);
+});
+
+parser.on('calibrate', (ev) => {
+  io.emit('calibrate', ev);
+});
+
+parser.on('log', (l) => {
+  io.emit('log', l);
+});
+
+parser.on('token', (tk) => {
+  // store token in latestStatus
+  latestStatus.token = tk;
+  io.emit('token', tk);
+});
+
+// Serial port setup (optional dependency)
 let port = null;
-let parser = null;
-let SerialPort = null;
+let Readline = null;
 try {
-  SerialPort = require('serialport').SerialPort;
-  const Readline = require('@serialport/parser-readline').ReadlineParser;
+  const SerialPort = require('serialport').SerialPort;
+  Readline = require('@serialport/parser-readline').ReadlineParser;
   port = new SerialPort({ path: config.serialPath, baudRate: config.baudRate, autoOpen: false });
-  parser = port.pipe(new Readline({ delimiter: '\n' }));
+  const parserSerial = port.pipe(new Readline({ delimiter: '\n' }));
 
-  port.open(err => {
-    if (err) {
-      console.error('Serial open error:', err.message);
-    } else {
-      console.log('Serial opened at', config.serialPath);
-    }
+  port.on('open', () => console.log('Serial opened', config.serialPath));
+  port.on('error', (e) => console.error('Serial error', e.message));
+  port.on('close', () => console.warn('Serial closed'));
+
+  parserSerial.on('data', (line) => {
+    parser.feed(line);
   });
 
-  parser.on('data', line => handleLine(line));
-  port.on('error', err => console.error('Serial error', err));
-  port.on('close', () => {
-    console.warn('Serial port closed');
+  port.open((err) => {
+    if (err) console.error('Failed to open serial port', err.message);
   });
+
 } catch (e) {
-  console.warn('serialport not installed or failed to load; serial features disabled.');
+  console.warn('serialport not installed or failed - serial disabled. Install serialport and @serialport/parser-readline for serial support.');
 }
 
-// state
-let latestStatus = { isValid: false, raw: [], parsed: {} };
-let lastPoll = 0;
-
+// helper to send raw messages to printer
 function sendRaw(msg) {
-  if (!port || !port.isOpen) {
-    console.warn('Serial not open, cannot send:', msg);
+  if (port && port.isOpen) {
+    const s = msg.endsWith('\r\n') || msg.endsWith('\n') ? msg : msg + '\r\n';
+    port.write(s, (err) => { if (err) console.error('Write failed', err.message); });
+    return true;
+  } else {
+    console.warn('Serial not open: cannot send', msg);
     return false;
   }
-  const s = msg.endsWith('\r\n') || msg.endsWith('\n') ? msg : msg + '\r\n';
-  port.write(s, (err) => {
-    if (err) console.error('Serial write err', err.message);
-  });
-  return true;
 }
 
-function handleLine(raw) {
-  const line = raw.toString().trim();
-  if (!line) return;
-  latestStatus.raw.push(line);
-  // Simple classification
-  if (line.startsWith('calibratejr:')) {
-    const payload = line.substring('calibratejr:'.length).trim();
-    latestStatus.parsed.calibrate = payload;
-    io.emit('calibrateEvent', { line, payload });
-  } else if (line.startsWith('j:') || line.startsWith('s:') || line.startsWith('o:') || line.startsWith('z:')) {
-    latestStatus.parsed.sysline = line;
-    io.emit('log', { type: 'sysline', line });
-  } else {
-    // try JSON
-    const firstBrace = line.indexOf('{'), lastBrace = line.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      const sub = line.substring(firstBrace, lastBrace + 1);
-      try {
-        const json = JSON.parse(sub);
-        latestStatus.parsed.json = json;
-        io.emit('status', { parsed: latestStatus.parsed, rawLine: line });
-        return;
-      } catch (e) {
-        // non-JSON or partial; fall through
-      }
-    }
-    io.emit('log', { type: 'line', line });
-  }
-}
-
-// poll loop for status
+// polling loop
+let lastPoll = 0;
 setInterval(() => {
   if (!port || !port.isOpen) return;
   const now = Date.now();
@@ -107,33 +99,53 @@ setInterval(() => {
   sendRaw('XYZv3/query=a');
 }, 100);
 
-// socket.io
-io.on('connection', socket => {
-  console.log('UI connected');
-  socket.emit('status', { parsed: latestStatus.parsed, raw: latestStatus.raw });
+// Socket.io endpoints (UI -> server)
+io.on('connection', (socket) => {
+  console.log('Client connected');
+  socket.emit('status', latestStatus);
 
-  socket.on('command', cmd => {
-    console.log('cmd', cmd);
+  socket.on('command', (cmd) => {
+    console.log('Received cmd', cmd);
     switch (cmd.action) {
-      case 'calibrate_start': sendRaw('XYZv3/action=calibratejr:new'); break;
-      case 'calibrate_detector_lowered': sendRaw('XYZv3/action=calibratejr:detectorok'); break;
-      case 'calibrate_detector_raised': sendRaw('XYZv3/action=calibratejr:release'); break;
-      case 'toggle_autolevel': sendRaw(`XYZv3/config=autolevel:${cmd.enable ? 'on' : 'off'}`); break;
+      case 'calibrate_start':
+        sendRaw('XYZv3/action=calibratejr:new');
+        break;
+      case 'calibrate_detector_lowered':
+        sendRaw('XYZv3/action=calibratejr:detectorok');
+        break;
+      case 'calibrate_detector_raised':
+        sendRaw('XYZv3/action=calibratejr:release');
+        break;
+      case 'toggle_autolevel':
+        sendRaw(`XYZv3/config=autolevel:${cmd.enable ? 'on' : 'off'}`);
+        break;
       case 'pause':
       case 'resume':
       case 'cancel': {
         const state = cmd.action === 'pause' ? 1 : (cmd.action === 'resume' ? 2 : 3);
-        const tk = cmd.token || '';
+        const tk = cmd.token || latestStatus.token || '';
         const j = JSON.stringify({ command: 6, state, token: tk });
         sendRaw(j);
         break;
       }
-      case 'home': sendRaw('XYZv3/action=home'); break;
-      case 'jog': sendRaw(`XYZv3/action=jog:${cmd.axis}:${cmd.dist}`); break;
-      case 'load_filament': sendRaw('XYZv3/action=loadfilament'); break;
-      case 'unload_filament': sendRaw('XYZv3/action=unloadfilament'); break;
-      case 'clean_nozzle': sendRaw('XYZv3/action=clean_nozzle'); break;
-      case 'set_zoffset': sendRaw(`XYZv3/config=zoffset:[${cmd.offset}]`); break;
+      case 'home':
+        sendRaw('XYZv3/action=home');
+        break;
+      case 'jog':
+        sendRaw(`XYZv3/action=jog:${cmd.axis}:${cmd.dist}`);
+        break;
+      case 'load_filament':
+        sendRaw('XYZv3/action=loadfilament');
+        break;
+      case 'unload_filament':
+        sendRaw('XYZv3/action=unloadfilament');
+        break;
+      case 'clean_nozzle':
+        sendRaw('XYZv3/action=cleannozzle:new');
+        break;
+      case 'set_zoffset':
+        sendRaw(`XYZv3/config=zoffset:[${cmd.offset}]`);
+        break;
       default:
         if (cmd.raw) sendRaw(cmd.raw);
         else console.warn('Unknown command', cmd);
@@ -141,7 +153,7 @@ io.on('connection', socket => {
   });
 });
 
-// optional webcam: node-webcam, low-fps base64 frames
+// Optional basic webcam streaming (low-fps jpeg base64 frames)
 if (config.enableWebcam) {
   try {
     const NodeWebcam = require('node-webcam');
@@ -156,11 +168,10 @@ if (config.enableWebcam) {
     }, config.webcamIntervalMs);
     console.log('Webcam streamer enabled.');
   } catch (e) {
-    console.warn('Webcam streamer disabled (node-webcam not installed).');
+    console.warn('Webcam disabled (node-webcam not installed).');
   }
 }
 
-// start http server
 const portHttp = config.port || 3000;
 server.listen(portHttp, () => {
   console.log(`Server listening on http://0.0.0.0:${portHttp}`);
