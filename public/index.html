@@ -66,9 +66,22 @@
     <section id="camera">
       <h3>Print Monitor</h3>
       <div id="cameraBox">
-        <img id="camFrame" alt="camera frame" />
+        <!-- Prefer mjpg-streamer stream on port 8080 (fast/reliable).
+            If you're accessing the dashboard from another host, replace 'localhost'
+            with the Pi's IP (or use http://<pi-ip>:8080/?action=stream directly). -->
+        <img id="mjpgStream" src="http://localhost:8080/?action=stream" alt="MJPEG stream" onerror="fallbackToSocket()" />
+        <!-- Fallback image for socket.io frames if mjpg-streamer isn't available -->
+        <img id="camFrame" style="display:none" alt="camera frame" />
       </div>
     </section>
+
+    <script>
+    function fallbackToSocket() {
+      document.getElementById('mjpgStream').style.display = 'none';
+      document.getElementById('camFrame').style.display = 'block';
+      // The existing socket.io frame handler will update camFrame.src when frames arrive.
+    }
+    </script>
   </main>
 
   <script src="/socket.io/socket.io.js"></script>

@@ -1,0 +1,17 @@
+[Unit]
+Description=mjpg-streamer (MJPEG webcam server)
+After=network.target
+
+[Service]
+User=pi
+Group=video
+EnvironmentFile=/etc/default/mjpg-streamer
+ExecStartPre=/bin/sh -c 'test -x /usr/local/bin/mjpg_streamer || /bin/false'
+ExecStart=/usr/local/bin/mjpg_streamer $MJPG_ARGS
+Restart=on-failure
+RestartSec=3
+# Ensure service doesn't run until video device permissions are correct
+# Adjust user/group (default 'pi' and 'video') as needed for your system.
+
+[Install]
+WantedBy=multi-user.target
