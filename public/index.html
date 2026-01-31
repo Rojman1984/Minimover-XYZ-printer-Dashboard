@@ -75,6 +75,20 @@
       </div>
     </section>
 
+    <section id="uploads">
+      <h3>Uploads & Print</h3>
+      <div class="uploadRow">
+        <input type="file" id="uploadFile" accept=".gcode" />
+        <button id="uploadBtn">Upload</button>
+      </div>
+      <div class="uploadProgress">
+        <div id="uploadProgressBar" style="width:0%">0%</div>
+      </div>
+      <div id="uploadStatus"></div>
+      <h4>Stored uploads</h4>
+      <ul id="uploadsList"></ul>
+    </section>
+
     <script>
     function fallbackToSocket() {
       document.getElementById('mjpgStream').style.display = 'none';

@@ -139,3 +139,115 @@ document.getElementById('setZ').onclick = () => {
   const off = parseInt(document.getElementById('zoff').value || '0', 10);
   socket.emit('command', { action: 'set_zoffset', offset: off });
 };
+
+// Upload UI
+const uploadFileEl = document.getElementById('uploadFile');
+const uploadBtn = document.getElementById('uploadBtn');
+const uploadProgressBar = document.getElementById('uploadProgressBar');
+const uploadStatus = document.getElementById('uploadStatus');
+const uploadsList = document.getElementById('uploadsList');
+
+function setUploadProgress(percent, text) {
+  uploadProgressBar.style.width = `${percent}%`;
+  uploadProgressBar.textContent = `${Math.round(percent)}%`;
+  if (text) uploadStatus.textContent = text;
+}
+
+async function refreshUploads() {
+  try {
+    const r = await fetch('/uploads');
+    const j = await r.json();
+    uploadsList.innerHTML = '';
+    if (j.ok && Array.isArray(j.files)) {
+      j.files.forEach(f => {
+        const li = document.createElement('li');
+        li.textContent = f + ' ';
+        const btn = document.createElement('button');
+        btn.textContent = 'Print';
+        btn.onclick = async () => {
+          btn.disabled = true;
+          const res = await fetch('/print', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: f })
+          });
+          const jr = await res.json();
+          if (!jr.ok) uploadStatus.textContent = `Print error: ${jr.error || 'unknown'}`;
+          else uploadStatus.textContent = `Print started for ${f}`;
+          btn.disabled = false;
+        };
+        li.appendChild(btn);
+        uploadsList.appendChild(li);
+      });
+    }
+  } catch (e) {
+    uploadStatus.textContent = 'Failed to list uploads';
+  }
+}
+
+// XHR upload to support progress events
+uploadBtn.onclick = () => {
+  const files = uploadFileEl.files;
+  if (!files || !files.length) { uploadStatus.textContent = 'No file selected'; return; }
+  const file = files[0];
+  const fd = new FormData();
+  fd.append('file', file, file.name);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload', true);
+
+  xhr.upload.onprogress = (ev) => {
+    if (ev.lengthComputable) {
+      const pct = (ev.loaded / ev.total) * 100;
+      setUploadProgress(pct, 'Uploading...');
+    }
+  };
+
+  xhr.onload = async () => {
+    if (xhr.status >= 200 && xhr.status < 300) {
+      try {
+        const res = JSON.parse(xhr.responseText);
+        if (res.ok) {
+          setUploadProgress(100, `Uploaded ${res.filename}`);
+          await refreshUploads();
+        } else {
+          uploadStatus.textContent = `Upload failed: ${res.error || 'unknown'}`;
+        }
+      } catch (e) {
+        uploadStatus.textContent = 'Upload response parse error';
+      }
+    } else {
+      uploadStatus.textContent = `Upload failed: ${xhr.statusText || xhr.status}`;
+    }
+  };
+
+  xhr.onerror = () => { uploadStatus.textContent = 'Upload network error'; };
+  xhr.send(fd);
+  setUploadProgress(0, 'Starting upload...');
+};
+
+// socket events for upload progress
+socket.on('upload_started', (info) => {
+  uploadStatus.textContent = `Upload started: ${info.filename || ''}`;
+  setUploadProgress(0);
+});
+socket.on('upload_progress', (p) => {
+  if (p && p.total) {
+    const pct = (p.sent / p.total) * 100;
+    setUploadProgress(pct, `Sending to printer: ${p.sent}/${p.total}`);
+  } else if (p && p.percent) {
+    setUploadProgress(p.percent, `Sending to printer: ${p.percent}%`);
+  }
+});
+socket.on('upload_finished', (r) => {
+  uploadStatus.textContent = `Upload finished. Token: ${r.token || ''}`;
+  setUploadProgress(100);
+  refreshUploads();
+});
+socket.on('upload_error', (e) => {
+  uploadStatus.textContent = `Upload error: ${e && e.error ? e.error : e}`;
+});
+
+window.addEventListener('load', () => {
+  refreshUploads();
+});

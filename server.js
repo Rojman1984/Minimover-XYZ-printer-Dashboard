@@ -24,6 +24,13 @@ const app = express();
 const server = http.createServer(app);
 const io = socketio(server);
 
+const upload = require('./lib/upload');
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+const { startUpload } = require('./lib/upload_serial');
+
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // instantiate parser
@@ -171,6 +178,51 @@ if (config.enableWebcam) {
     console.warn('Webcam disabled (node-webcam not installed).');
   }
 }
+
+app.post('/upload', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'no file uploaded' });
+  // The filename is already set by storage in lib/upload.js
+  return res.json({ 
+    ok: true, 
+    filename: req.file.filename, 
+    size: req.file.size 
+  });
+});
+
+app.get('/uploads', (req, res) => {
+  try {
+    const files = fs.readdirSync(uploadsDir).filter(f => fs.statSync(path.join(uploadsDir, f)).isFile());
+    res.json({ ok: true, files });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.post('/print', (req, res) => {
+  const filename = req.body && req.body.filename;
+  if (!filename) return res.status(400).json({ ok: false, error: 'missing filename' });
+  const filePath = path.join(uploadsDir, filename);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ ok: false, error: 'file not found' });
+  if (!port || !port.isOpen) return res.status(500).json({ ok: false, error: 'serial not open' });
+
+  const ee = startUpload(filePath, port, parser);
+
+  ee.on('started', (info) => {
+    io.emit('upload_started', { filename: info.fileName, total: info.total });
+  });
+  ee.on('progress', (p) => {
+    io.emit('upload_progress', p);
+  });
+  ee.on('finished', (r) => {
+    latestStatus.token = r.token;
+    io.emit('upload_finished', r);
+  });
+  ee.on('error', (e) => {
+    io.emit('upload_error', { error: String(e) });
+  });
+
+  return res.json({ ok: true, started: true });
+});
 
 const portHttp = config.port || 3000;
 server.listen(portHttp, () => {
