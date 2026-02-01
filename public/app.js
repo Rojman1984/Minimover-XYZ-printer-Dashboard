@@ -6,12 +6,86 @@ const connEl = document.getElementById('connection');
 const extruderTemp = document.getElementById('extruderTemp');
 const extruderTarget = document.getElementById('extruderTarget');
 const filamentLen = document.getElementById('filamentLen');
+const filamentEst = document.getElementById('filamentEst');
 const filamentName = document.getElementById('filamentName');
 const jobFile = document.getElementById('jobFile');
 const jobBar = document.getElementById('jobBar');
 const jobTimes = document.getElementById('jobTimes');
 const logEl = document.getElementById('log');
 const camImg = document.getElementById('camFrame');
+
+// Filament modal elements
+const filamentModal = document.getElementById('filamentModal');
+const filamentClose = document.getElementById('filamentClose');
+const filamentSave = document.getElementById('filamentSave');
+const filamentMaterial = document.getElementById('filamentMaterial');
+const filamentDiameter = document.getElementById('filamentDiameter');
+const filamentSpoolWeight = document.getElementById('filamentSpoolWeight');
+const filamentTareWeight = document.getElementById('filamentTareWeight');
+const filamentDensity = document.getElementById('filamentDensity');
+const filamentCalc = document.getElementById('filamentCalc');
+
+const materialDensityMap = {
+  PLA: 1.24,
+  ABS: 1.04,
+  PETG: 1.27,
+  TPE: 1.21,
+  PVA: 1.19
+};
+
+function calcFilamentLengthMeters() {
+  const diameterMm = parseFloat(filamentDiameter.value);
+  const spoolWeightG = parseFloat(filamentSpoolWeight.value);
+  const tareWeightG = parseFloat(filamentTareWeight.value) || 0;
+  const density = parseFloat(filamentDensity.value);
+  if (!diameterMm || !spoolWeightG || !density) return null;
+  const filamentMassG = Math.max(0, spoolWeightG - tareWeightG);
+  const radiusMm = diameterMm / 2.0;
+  const areaMm2 = Math.PI * radiusMm * radiusMm;
+  const volumeMm3 = (filamentMassG / density) * 1000.0; // cm^3 to mm^3
+  const lengthMm = volumeMm3 / areaMm2;
+  return lengthMm / 1000.0;
+}
+
+function updateFilamentCalc() {
+  const lenM = calcFilamentLengthMeters();
+  filamentCalc.textContent = lenM ? `Estimated length: ${lenM.toFixed(2)} m` : 'Estimated length: -- m';
+}
+
+function openFilamentModal() {
+  const saved = JSON.parse(localStorage.getItem('filamentProfile') || '{}');
+  if (saved.material) filamentMaterial.value = saved.material;
+  if (saved.diameter) filamentDiameter.value = saved.diameter;
+  if (saved.spoolWeight) filamentSpoolWeight.value = saved.spoolWeight;
+  if (saved.tareWeight) filamentTareWeight.value = saved.tareWeight;
+  if (saved.density) filamentDensity.value = saved.density;
+  updateFilamentCalc();
+  filamentModal.classList.remove('hidden');
+}
+
+function closeFilamentModal() {
+  filamentModal.classList.add('hidden');
+}
+
+function saveFilamentProfile() {
+  const profile = {
+    material: filamentMaterial.value,
+    diameter: parseFloat(filamentDiameter.value),
+    spoolWeight: parseFloat(filamentSpoolWeight.value),
+    tareWeight: parseFloat(filamentTareWeight.value) || 0,
+    density: parseFloat(filamentDensity.value)
+  };
+  localStorage.setItem('filamentProfile', JSON.stringify(profile));
+  updateFilamentCalc();
+  closeFilamentModal();
+  updateFilamentEstimateUI();
+}
+
+function updateFilamentEstimateUI() {
+  const lenM = calcFilamentLengthMeters();
+  if (lenM) filamentEst.textContent = `Spool est: ${lenM.toFixed(2)} m`;
+  else filamentEst.textContent = '--';
+}
 
 function pushLog(s) {
   const p = document.createElement('div');
@@ -40,14 +114,17 @@ socket.on('status', (st) => {
   }
 
   // filament
-  if (st.filamentRemaining_mm) {
-    const m = (st.filamentRemaining_mm / 1000.0).toFixed(2);
+  if (st.filamentRemaining_mm !== null && st.filamentRemaining_mm !== undefined) {
+    const m = (st.filamentRemaining_mm / 10000.0).toFixed(2);
     filamentLen.textContent = `${m} m`;
   } else {
-    filamentLen.textContent = '-- m';
+    const est = calcFilamentLengthMeters();
+    filamentLen.textContent = est ? `${est.toFixed(2)} m` : '-- m';
   }
   if (st.filamentSerial) filamentName.textContent = st.filamentSerial;
   else filamentName.textContent = (st.filamentInfo && st.filamentInfo[0]) ? st.filamentInfo[0] : '--';
+
+  updateFilamentEstimateUI();
 
   // job
   if (st.fileName) jobFile.textContent = st.fileName;
@@ -67,11 +144,10 @@ socket.on('status', (st) => {
     jobTimes.textContent = `${st.elapsedMin || '--'}m / ${st.timeLeftMin || '--'}m left`;
   }
 
-  // printer state
-  if (st.printerStateStr) {
+  // printer state (only log state changes, not every update)
+  if (st.printerStateStr && st.printerStateStr !== window.lastPrinterState) {
+    window.lastPrinterState = st.printerStateStr;
     pushLog(`State: ${st.printerStateStr}`);
-  } else if (st.printerState) {
-    pushLog(`State code: ${st.printerState}`);
   }
 
   // raw sample for debugging
@@ -133,7 +209,10 @@ document.getElementById('cancel').onclick = () => {
   socket.emit('command', { action: 'cancel', token });
 };
 document.getElementById('home').onclick = () => socket.emit('command', { action: 'home' });
-document.getElementById('load').onclick = () => socket.emit('command', { action: 'load_filament' });
+document.getElementById('load').onclick = () => {
+  socket.emit('command', { action: 'load_filament' });
+  openFilamentModal();
+};
 document.getElementById('load_stop').onclick = () => socket.emit('command', { action: 'load_filament_stop' });
 document.getElementById('unload').onclick = () => socket.emit('command', { action: 'unload_filament' });
 document.getElementById('unload_stop').onclick = () => socket.emit('command', { action: 'unload_filament_stop' });
@@ -142,6 +221,32 @@ document.getElementById('setZ').onclick = () => {
   const off = parseInt(document.getElementById('zoff').value || '0', 10);
   socket.emit('command', { action: 'set_zoffset', offset: off });
 };
+
+// Jog controls
+function jog(axis, dir) {
+  const len = document.getElementById('jogDistance').value;
+  socket.emit('command', { action: 'jog', axis, dir, len });
+}
+document.getElementById('jogXPlus').onclick = () => jog('x', '+');
+document.getElementById('jogXMinus').onclick = () => jog('x', '-');
+document.getElementById('jogYPlus').onclick = () => jog('y', '+');
+document.getElementById('jogYMinus').onclick = () => jog('y', '-');
+document.getElementById('jogZPlus').onclick = () => jog('z', '+');
+document.getElementById('jogZMinus').onclick = () => jog('z', '-');
+document.getElementById('jogHome').onclick = () => socket.emit('command', { action: 'home' });
+
+// Jog controls
+function jog(axis, dir) {
+  const len = document.getElementById('jogDistance').value;
+  socket.emit('command', { action: 'jog', axis, dir, len });
+}
+document.getElementById('jogXPlus').onclick = () => jog('x', '+');
+document.getElementById('jogXMinus').onclick = () => jog('x', '-');
+document.getElementById('jogYPlus').onclick = () => jog('y', '+');
+document.getElementById('jogYMinus').onclick = () => jog('y', '-');
+document.getElementById('jogZPlus').onclick = () => jog('z', '+');
+document.getElementById('jogZMinus').onclick = () => jog('z', '-');
+document.getElementById('jogHome').onclick = () => socket.emit('command', { action: 'home' });
 
 // Upload UI
 const uploadFileEl = document.getElementById('uploadFile');
@@ -165,10 +270,11 @@ async function refreshUploads() {
       j.files.forEach(f => {
         const li = document.createElement('li');
         li.textContent = f + ' ';
-        const btn = document.createElement('button');
-        btn.textContent = 'Print';
-        btn.onclick = async () => {
-          btn.disabled = true;
+        
+        const printBtn = document.createElement('button');
+        printBtn.textContent = 'Print';
+        printBtn.onclick = async () => {
+          printBtn.disabled = true;
           const res = await fetch('/print', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -177,9 +283,33 @@ async function refreshUploads() {
           const jr = await res.json();
           if (!jr.ok) uploadStatus.textContent = `Print error: ${jr.error || 'unknown'}`;
           else uploadStatus.textContent = `Print started for ${f}`;
-          btn.disabled = false;
+          printBtn.disabled = false;
         };
-        li.appendChild(btn);
+        li.appendChild(printBtn);
+        
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.style.marginLeft = '5px';
+        delBtn.onclick = async () => {
+          if (!confirm(`Delete ${f}?`)) return;
+          delBtn.disabled = true;
+          try {
+            const res = await fetch(`/uploads/${encodeURIComponent(f)}`, { method: 'DELETE' });
+            const jr = await res.json();
+            if (jr.ok) {
+              uploadStatus.textContent = `Deleted ${f}`;
+              await refreshUploads();
+            } else {
+              uploadStatus.textContent = `Delete error: ${jr.error || 'unknown'}`;
+              delBtn.disabled = false;
+            }
+          } catch (e) {
+            uploadStatus.textContent = `Delete failed: ${e.message}`;
+            delBtn.disabled = false;
+          }
+        };
+        li.appendChild(delBtn);
+        
         uploadsList.appendChild(li);
       });
     }
@@ -211,7 +341,11 @@ uploadBtn.onclick = () => {
       try {
         const res = JSON.parse(xhr.responseText);
         if (res.ok) {
-          setUploadProgress(100, `Uploaded ${res.filename}`);
+          let statusMsg = `Uploaded ${res.filename}`;
+          if (res.converted) {
+            statusMsg += ` (converted from ${res.originalFormat})`;
+          }
+          setUploadProgress(100, statusMsg);
           await refreshUploads();
         } else {
           uploadStatus.textContent = `Upload failed: ${res.error || 'unknown'}`;
@@ -251,15 +385,33 @@ socket.on('upload_error', (e) => {
   uploadStatus.textContent = `Upload error: ${e && e.error ? e.error : e}`;
 });
 
+filamentMaterial.addEventListener('change', () => {
+  if (materialDensityMap[filamentMaterial.value]) {
+    filamentDensity.value = materialDensityMap[filamentMaterial.value];
+  }
+  updateFilamentCalc();
+});
+[filamentDiameter, filamentSpoolWeight, filamentTareWeight, filamentDensity].forEach((el) => {
+  el.addEventListener('input', updateFilamentCalc);
+});
+filamentClose.addEventListener('click', closeFilamentModal);
+filamentSave.addEventListener('click', saveFilamentProfile);
+
 window.addEventListener('load', () => {
   refreshUploads();
+  updateFilamentEstimateUI();
   
   // Try to load MJPG stream, fallback to socket.io frames on error
   const mjpgStream = document.getElementById('mjpgStream');
   const camFrame = document.getElementById('camFrame');
   
-  mjpgStream.src = 'http://localhost:8080/?action=stream';
+  const streamUrl = `http://${window.location.hostname}:8080/?action=stream`;
+  console.log('Attempting to load camera stream from:', streamUrl);
+  
+  mjpgStream.src = streamUrl;
+  mjpgStream.onload = () => console.log('Camera stream loaded successfully');
   mjpgStream.onerror = () => {
+    console.log('MJPG stream failed, using socket.io fallback');
     mjpgStream.style.display = 'none';
     camFrame.style.display = 'block';
   };

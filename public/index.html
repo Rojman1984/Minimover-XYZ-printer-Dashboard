@@ -17,31 +17,57 @@
       <div class="tile" id="extruder">
         <h2>Extruder</h2>
         <div class="big" id="extruderTemp">-- °C</div>
-        <div id="extruderTarget">target: -- °C</div>
+        <div id="extruderTarget" style="font-size:11px;">target: -- °C</div>
       </div>
 
       <div class="tile" id="filament">
         <h2>Filament</h2>
         <div class="big" id="filamentLen">-- m</div>
-        <div id="filamentName">--</div>
+        <div class="small" id="filamentEst">--</div>
+        <div id="filamentName" style="font-size:11px;">--</div>
       </div>
 
       <div class="tile" id="job">
         <h2>Job</h2>
-        <div id="jobFile">No job</div>
+        <div id="jobFile" style="font-size:11px; margin-bottom:4px;">No job</div>
         <div class="progressWrapper">
           <div id="jobBar"></div>
         </div>
-        <div id="jobTimes">--</div>
+        <div id="jobTimes" style="font-size:10px;">--</div>
       </div>
     </section>
+
+    <div>
+      <section id="camera">
+        <h3>Print Monitor</h3>
+        <div id="cameraBox">
+          <img id="mjpgStream" alt="MJPEG stream" />
+          <img id="camFrame" style="display:none" alt="camera frame" />
+        </div>
+      </section>
+
+      <section id="uploads">
+        <h3>Uploads & Print</h3>
+        <div class="uploadRow">
+          <input type="file" id="uploadFile" accept=".gcode,.3mf" />
+          <button id="uploadBtn">Upload</button>
+        </div>
+        <div class="uploadProgress">
+          <div id="uploadProgressBar" style="width:0%">0%</div>
+        </div>
+        <div id="uploadStatus" style="font-size:11px; margin:4px 0;"></div>
+        <div style="font-size:10px; color:#666; margin:4px 0;">Accepts: .gcode (ready to print) or .3mf (if pre-sliced)</div>
+        <h4>Stored uploads</h4>
+        <ul id="uploadsList"></ul>
+      </section>
+    </div>
 
     <section id="controls">
       <h3>Controls</h3>
       <div class="btnRow">
         <button id="cal_start">Calibrate Start</button>
-        <button id="cal_lower">Lower Detector Done</button>
-        <button id="cal_raise">Raise Detector Done</button>
+        <button id="cal_lower">Lower Probe Done</button>
+        <button id="cal_raise">Raise Probe Done</button>
       </div>
       <div class="btnRow">
         <button id="toggle_autolevel">Toggle Auto-Level</button>
@@ -60,40 +86,87 @@
         <button id="clean_nozzle">Clean Nozzle</button>
       </div>
 
-      <div class="zRow">
-        <label>Z offset: <input id="zoff" type="number" step="1" value="0"/></label>
-        <button id="setZ">Set</button>
+      <div style="display:flex; gap:12px; margin-top:12px;">
+        <div>
+          <h4 style="margin:0 0 6px 0;">Jog Controls</h4>
+          <div class="jogGrid">
+            <div></div>
+            <button id="jogYPlus" class="jogBtn">Y+</button>
+            <div></div>
+            <button id="jogXMinus" class="jogBtn">X-</button>
+            <button id="jogHome" class="jogBtn">⌂</button>
+            <button id="jogXPlus" class="jogBtn">X+</button>
+            <div></div>
+            <button id="jogYMinus" class="jogBtn">Y-</button>
+            <div></div>
+            <button id="jogZPlus" class="jogBtn">Z+</button>
+            <div></div>
+            <button id="jogZMinus" class="jogBtn">Z-</button>
+          </div>
+          <label style="font-size:11px; margin-top:4px; display:block;">
+            Distance:
+            <select id="jogDistance" style="font-size:11px; padding:2px;">
+              <option value="0.1">0.1</option>
+              <option value="1">1</option>
+              <option value="10" selected>10</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select> mm
+          </label>
+        </div>
+        <div style="flex:1;">
+          <div class="zRow">
+            <label>Z offset: <input id="zoff" type="number" step="1" value="0"/></label>
+            <button id="setZ">Set</button>
+          </div>
+          <div id="log"></div>
+        </div>
       </div>
 
-      <div id="log"></div>
-    </section>
-
-    <section id="camera">
-      <h3>Print Monitor</h3>
-      <div id="cameraBox">
-        <!-- Prefer mjpg-streamer stream on port 8080 (fast/reliable).
-            If you're accessing the dashboard from another host, replace 'localhost'
-            with the Pi's IP (or use http://<pi-ip>:8080/?action=stream directly). -->
-        <img id="mjpgStream" alt="MJPEG stream" />
-        <!-- Fallback image for socket.io frames if mjpg-streamer isn't available -->
-        <img id="camFrame" style="display:none" alt="camera frame" />
-      </div>
-    </section>
-
-    <section id="uploads">
-      <h3>Uploads & Print</h3>
-      <div class="uploadRow">
-        <input type="file" id="uploadFile" accept=".gcode" />
-        <button id="uploadBtn">Upload</button>
-      </div>
-      <div class="uploadProgress">
-        <div id="uploadProgressBar" style="width:0%">0%</div>
-      </div>
-      <div id="uploadStatus"></div>
-      <h4>Stored uploads</h4>
-      <ul id="uploadsList"></ul>
     </section>
   </main>
+
+  <div id="filamentModal" class="modal hidden">
+    <div class="modalContent">
+      <div class="modalHeader">
+        <h3>Filament Setup</h3>
+        <button id="filamentClose" class="modalClose">×</button>
+      </div>
+      <div class="modalBody">
+        <label>
+          Material type
+          <select id="filamentMaterial">
+            <option value="PLA">PLA</option>
+            <option value="ABS">ABS</option>
+            <option value="PETG">PETG</option>
+            <option value="TPE">TPE/TPU</option>
+            <option value="PVA">PVA</option>
+            <option value="CUSTOM">Custom</option>
+          </select>
+        </label>
+        <label>
+          Diameter (mm)
+          <input id="filamentDiameter" type="number" step="0.01" value="1.75" />
+        </label>
+        <label>
+          Spool + filament weight (g)
+          <input id="filamentSpoolWeight" type="number" step="1" placeholder="e.g. 1000" />
+        </label>
+        <label>
+          Empty spool (tare) weight (g)
+          <input id="filamentTareWeight" type="number" step="1" placeholder="optional" />
+        </label>
+        <label>
+          Density (g/cm³)
+          <input id="filamentDensity" type="number" step="0.01" value="1.24" />
+        </label>
+        <div class="modalNote" id="filamentCalc">Estimated length: -- m</div>
+      </div>
+      <div class="modalFooter">
+        <button id="filamentSave">Save</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/app.js"></script>

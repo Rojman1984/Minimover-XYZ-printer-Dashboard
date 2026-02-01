@@ -8,6 +8,7 @@ const http = require('http');
 const os = require('os');
 
 const Parser = require('./lib/parser');
+const { convert3mfToGcode } = require('./lib/convert_3mf');
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const config = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE)) : {
@@ -27,8 +28,7 @@ const socketio = require('socket.io');
 const server = http.createServer(app);
 const io = socketio(server);
 
-const upload = require('./lib/upload');
-const uploadsDir = path.join(__dirname, 'uploads');
+const { upload, uploadsDir } = require('./lib/upload');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const { startUpload } = require('./lib/upload_serial');
@@ -175,8 +175,8 @@ io.on('connection', (socket) => {
         sendRaw('XYZv3/action=home');
         break;
       case 'jog':
-        const dir = cmd.dist < 0 ? '-' : '+';
-        const len = Math.abs(cmd.dist);
+        const dir = cmd.dir || '+';
+        const len = cmd.len || '10';
         sendRaw(`XYZv3/action=jog:{"axis":"${cmd.axis}","dir":"${dir}","len":"${len}"}`);
         break;
       case 'load_filament':
@@ -223,9 +223,43 @@ if (config.enableWebcam) {
   }
 }
 
-app.post('/upload', upload.single('file'), (req, res) => {
+app.post('/upload', upload.single('file'), async (req, res) => {
+  console.log('[UPLOAD] Received file:', req.file ? req.file.filename : 'none');
   if (!req.file) return res.status(400).json({ ok: false, error: 'no file uploaded' });
-  // The filename is already set by storage in lib/upload.js
+  
+  // Check if it's a .3mf file that needs conversion
+  if (req.file.filename.toLowerCase().endsWith('.3mf')) {
+    console.log('[UPLOAD] Converting .3mf file:', req.file.filename);
+    try {
+      const gcodeFilename = req.file.filename.replace(/\.3mf$/i, '.gcode');
+      const gcodePath = path.join(uploadsDir, gcodeFilename);
+      
+      console.log('[UPLOAD] Converting from:', req.file.path, 'to:', gcodePath);
+      await convert3mfToGcode(req.file.path, gcodePath);
+      
+      // Remove the original .3mf file
+      fs.unlinkSync(req.file.path);
+      
+      console.log('[UPLOAD] Conversion successful:', gcodeFilename);
+      return res.json({
+        ok: true,
+        filename: gcodeFilename,
+        size: fs.statSync(gcodePath).size,
+        converted: true,
+        originalFormat: '3mf'
+      });
+    } catch (error) {
+      console.error('[UPLOAD] Conversion failed:', error.message);
+      console.error('[UPLOAD] Error stack:', error.stack);
+      return res.status(500).json({ 
+        ok: false, 
+        error: `Failed to convert .3mf file: ${error.message}` 
+      });
+    }
+  }
+  
+  // Regular gcode file
+  console.log('[UPLOAD] Gcode file uploaded:', req.file.filename);
   return res.json({
     ok: true,
     filename: req.file.filename,
@@ -235,8 +269,26 @@ app.post('/upload', upload.single('file'), (req, res) => {
 
 app.get('/uploads', (req, res) => {
   try {
-    const files = fs.readdirSync(uploadsDir).filter(f => fs.statSync(path.join(uploadsDir, f)).isFile());
+    const files = fs.readdirSync(uploadsDir)
+      .filter(f => fs.statSync(path.join(uploadsDir, f)).isFile())
+      .map(f => ({ name: f, time: fs.statSync(path.join(uploadsDir, f)).mtime.getTime() }))
+      .sort((a, b) => b.time - a.time)
+      .slice(0, 10)
+      .map(f => f.name);
     res.json({ ok: true, files });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+});
+
+app.delete('/uploads/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    if (!filename) return res.status(400).json({ ok: false, error: 'missing filename' });
+    const filePath = path.join(uploadsDir, filename);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ ok: false, error: 'file not found' });
+    fs.unlinkSync(filePath);
+    res.json({ ok: true, message: 'File deleted' });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e) });
   }

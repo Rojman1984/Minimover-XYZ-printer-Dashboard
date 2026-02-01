@@ -6,7 +6,8 @@ Features:
 - Serial connection to printer (USB)
 - Active polling for near-realtime status (mirrors miniMover request/response)
 - Web UI with control buttons: calibrate, autolevel toggle, pause/resume/cancel, home, jog, load/unload, clean nozzle, z-offset
-- Optional USB webcam print monitor (low-framerate base64 images) — can be extended to MJPEG with mjpg-streamer / ffmpeg
+- **File upload with automatic .3mf to gcode conversion** for XYZ native files
+- Optional USB webcam print monitor via mjpg-streamer
 - Systemd service example and installer script
 - Serial auto-reconnect
 
@@ -91,8 +92,21 @@ Quick steps:
    If accessing the dashboard from another machine, replace "localhost" with the Pi's IP
    in the embedded image src or visit the stream URL directly.
 
+## File Upload & .3mf Support
+
+The dashboard supports uploading both .gcode and .3mf files:
+
+- **GCode files** (.gcode) are stored directly in the uploads folder
+- **.3mf files** are automatically converted to gcode during upload
+  - XYZ .3mf files contain pre-sliced gcode in the archive
+  - The converter extracts and converts the gcode automatically
+  - Requires `unzip` to be installed (usually pre-installed on Raspberry Pi OS)
+
+Upload files via the "Uploads & Print" section in the dashboard.
+
 Roadmap:
 
 - Improve server parser to map exact XYZPrinterStatus fields (Task A) **COMPLETE**
 - Add high-performance MJPEG camera streaming via ffmpeg (Task B) **COMPLETE**
-- File upload & print start implementation (Task C)
+- File upload & print start implementation (Task C) **COMPLETE**
+- .3mf to gcode conversion (Task D) **COMPLETE**
