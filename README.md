@@ -48,6 +48,13 @@ sudo apt-get install -y build-essential git pkg-config libv4l-dev v4l-utils ffmp
    npm start
 7. Open browser: http://<pi-ip>:3000
 
+## Running Tests
+
+To validate the parser and status mappings:
+```bash
+node test/parser.test.js
+```
+
 Systemd service and setup script included (setup.sh and minimover-dashboard.service).
 See docs/ for further notes.
 
