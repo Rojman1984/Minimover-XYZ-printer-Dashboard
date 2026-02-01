@@ -134,7 +134,10 @@ document.getElementById('cancel').onclick = () => {
 };
 document.getElementById('home').onclick = () => socket.emit('command', { action: 'home' });
 document.getElementById('load').onclick = () => socket.emit('command', { action: 'load_filament' });
+document.getElementById('load_stop').onclick = () => socket.emit('command', { action: 'load_filament_stop' });
 document.getElementById('unload').onclick = () => socket.emit('command', { action: 'unload_filament' });
+document.getElementById('unload_stop').onclick = () => socket.emit('command', { action: 'unload_filament_stop' });
+document.getElementById('clean_nozzle').onclick = () => socket.emit('command', { action: 'clean_nozzle' });
 document.getElementById('setZ').onclick = () => {
   const off = parseInt(document.getElementById('zoff').value || '0', 10);
   socket.emit('command', { action: 'set_zoffset', offset: off });
@@ -250,4 +253,14 @@ socket.on('upload_error', (e) => {
 
 window.addEventListener('load', () => {
   refreshUploads();
+  
+  // Try to load MJPG stream, fallback to socket.io frames on error
+  const mjpgStream = document.getElementById('mjpgStream');
+  const camFrame = document.getElementById('camFrame');
+  
+  mjpgStream.src = 'http://localhost:8080/?action=stream';
+  mjpgStream.onerror = () => {
+    mjpgStream.style.display = 'none';
+    camFrame.style.display = 'block';
+  };
 });

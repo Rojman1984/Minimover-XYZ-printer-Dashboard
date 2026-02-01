@@ -52,7 +52,12 @@
       <div class="btnRow">
         <button id="home">Home</button>
         <button id="load">Load Filament</button>
+        <button id="load_stop">Stop Load</button>
+      </div>
+      <div class="btnRow">
         <button id="unload">Unload Filament</button>
+        <button id="unload_stop">Stop Unload</button>
+        <button id="clean_nozzle">Clean Nozzle</button>
       </div>
 
       <div class="zRow">
@@ -69,7 +74,7 @@
         <!-- Prefer mjpg-streamer stream on port 8080 (fast/reliable).
             If you're accessing the dashboard from another host, replace 'localhost'
             with the Pi's IP (or use http://<pi-ip>:8080/?action=stream directly). -->
-        <img id="mjpgStream" src="http://localhost:8080/?action=stream" alt="MJPEG stream" onerror="fallbackToSocket()" />
+        <img id="mjpgStream" alt="MJPEG stream" />
         <!-- Fallback image for socket.io frames if mjpg-streamer isn't available -->
         <img id="camFrame" style="display:none" alt="camera frame" />
       </div>
@@ -88,14 +93,6 @@
       <h4>Stored uploads</h4>
       <ul id="uploadsList"></ul>
     </section>
-
-    <script>
-    function fallbackToSocket() {
-      document.getElementById('mjpgStream').style.display = 'none';
-      document.getElementById('camFrame').style.display = 'block';
-      // The existing socket.io frame handler will update camFrame.src when frames arrive.
-    }
-    </script>
   </main>
 
   <script src="/socket.io/socket.io.js"></script>

@@ -70,25 +70,54 @@ parser.on('token', (tk) => {
 
 // Serial port setup (optional dependency)
 try {
-  const SerialPort = require('serialport');
-  const Readline = require('@serialport/parser-readline');
-  port = new SerialPort({ path: config.serialPath, baudRate: config.baudRate, autoOpen: false });  // port already declared above
-  const parserSerial = port.pipe(new Readline({ delimiter: '\n' }));
+  const { SerialPort } = require('serialport');
+  const { ReadlineParser } = require('@serialport/parser-readline');
+  
+  // Auto-detect serial port if config path doesn't exist
+  async function detectSerialPort() {
+    const ports = await SerialPort.list();
+    console.log('Available serial ports:', ports.map(p => p.path).join(', '));
+    
+    // Try config path first
+    if (ports.find(p => p.path === config.serialPath)) {
+      return config.serialPath;
+    }
+    
+    // Look for common USB serial devices
+    const usbPort = ports.find(p => 
+      p.path.startsWith('/dev/ttyUSB') || 
+      p.path.startsWith('/dev/ttyACM')
+    );
+    
+    if (usbPort) {
+      console.log(`Auto-detected serial port: ${usbPort.path}`);
+      return usbPort.path;
+    }
+    
+    return config.serialPath; // fallback
+  }
+  
+  detectSerialPort().then(serialPath => {
+    port = new SerialPort({ path: serialPath, baudRate: config.baudRate, autoOpen: false });
+    const parserSerial = port.pipe(new ReadlineParser({ delimiter: '\n' }));
 
-  port.on('open', () => console.log('Serial opened', config.serialPath));
-  port.on('error', (e) => console.error('Serial error', e.message));
-  port.on('close', () => console.warn('Serial closed'));
+    port.on('open', () => console.log('Serial opened', serialPath));
+    port.on('error', (e) => console.error('Serial error', e.message));
+    port.on('close', () => console.warn('Serial closed'));
 
-  parserSerial.on('data', (line) => {
-    parser.feed(line);
-  });
+    parserSerial.on('data', (line) => {
+      parser.feed(line);
+    });
 
-  port.open((err) => {
-    if (err) console.error('Failed to open serial port', err.message);
+    port.open((err) => {
+      if (err) console.error('Failed to open serial port', err.message);
+    });
   });
 
 } catch (e) {
-  console.warn('serialport not installed or failed - serial disabled. Install serialport and @serialport/parser-readline for serial support.');
+  console.warn('serialport not installed or failed - serial disabled.');
+  console.warn('Error details:', e.message);
+  console.warn('Install serialport and @serialport/parser-readline for serial support.');
 }
 
 // helper to send raw messages to printer
@@ -119,7 +148,6 @@ io.on('connection', (socket) => {
   socket.emit('status', latestStatus);
 
   socket.on('command', (cmd) => {
-    console.log('Received cmd', cmd);
     switch (cmd.action) {
       case 'calibrate_start':
         sendRaw('XYZv3/action=calibratejr:new');
@@ -147,13 +175,21 @@ io.on('connection', (socket) => {
         sendRaw('XYZv3/action=home');
         break;
       case 'jog':
-        sendRaw(`XYZv3/action=jog:${cmd.axis}:${cmd.dist}`);
+        const dir = cmd.dist < 0 ? '-' : '+';
+        const len = Math.abs(cmd.dist);
+        sendRaw(`XYZv3/action=jog:{"axis":"${cmd.axis}","dir":"${dir}","len":"${len}"}`);
         break;
       case 'load_filament':
-        sendRaw('XYZv3/action=loadfilament');
+        sendRaw('XYZv3/action=load:new');
+        break;
+      case 'load_filament_stop':
+        sendRaw('XYZv3/action=load:cancel');
         break;
       case 'unload_filament':
-        sendRaw('XYZv3/action=unloadfilament');
+        sendRaw('XYZv3/action=unload:new');
+        break;
+      case 'unload_filament_stop':
+        sendRaw('XYZv3/action=unload:cancel');
         break;
       case 'clean_nozzle':
         sendRaw('XYZv3/action=cleannozzle:new');
