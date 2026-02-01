@@ -8,6 +8,7 @@ Features:
 - Web UI with control buttons: calibrate, autolevel toggle, pause/resume/cancel, home, jog, load/unload, clean nozzle, z-offset
 - Optional USB webcam print monitor (low-framerate base64 images) — can be extended to MJPEG with mjpg-streamer / ffmpeg
 - Systemd service example and installer script
+- Serial auto-reconnect
 
 ## Prerequisites — build & test the miniMover console (printer interface)
 
