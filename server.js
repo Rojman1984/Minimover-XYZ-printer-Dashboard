@@ -5,7 +5,6 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const http = require('http');
-const socketio = require('socket.io');
 
 const Parser = require('./lib/parser');
 
@@ -17,10 +16,13 @@ const config = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FI
   enableWebcam: true,
   webcamIntervalMs: 500,
   webcamDevice: '/dev/video0',
+  // Optional basic auth
   port: 3000
 };
 
 const app = express();
+const socketio = require('socket.io');
+
 const server = http.createServer(app);
 const io = socketio(server);
 
@@ -29,6 +31,8 @@ const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const { startUpload } = require('./lib/upload_serial');
+const SerialBridge = require('./lib/serial_bridge');
+const UploadV3 = require('./lib/upload_v3');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -59,12 +63,11 @@ parser.on('token', (tk) => {
   io.emit('token', tk);
 });
 
+
 // Serial port setup (optional dependency)
-let port = null;
-let Readline = null;
 try {
-  const SerialPort = require('serialport').SerialPort;
-  Readline = require('@serialport/parser-readline').ReadlineParser;
+  const SerialPort = require('serialport');
+  const Readline = require('@serialport/parser-readline');
   port = new SerialPort({ path: config.serialPath, baudRate: config.baudRate, autoOpen: false });
   const parserSerial = port.pipe(new Readline({ delimiter: '\n' }));
 
@@ -127,6 +130,7 @@ io.on('connection', (socket) => {
         sendRaw(`XYZv3/config=autolevel:${cmd.enable ? 'on' : 'off'}`);
         break;
       case 'pause':
+
       case 'resume':
       case 'cancel': {
         const state = cmd.action === 'pause' ? 1 : (cmd.action === 'resume' ? 2 : 3);
@@ -182,10 +186,10 @@ if (config.enableWebcam) {
 app.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'no file uploaded' });
   // The filename is already set by storage in lib/upload.js
-  return res.json({ 
-    ok: true, 
-    filename: req.file.filename, 
-    size: req.file.size 
+  return res.json({
+    ok: true,
+    filename: req.file.filename,
+    size: req.file.size
   });
 });
 
@@ -204,7 +208,8 @@ app.post('/print', (req, res) => {
   const filePath = path.join(uploadsDir, filename);
   if (!fs.existsSync(filePath)) return res.status(404).json({ ok: false, error: 'file not found' });
   if (!port || !port.isOpen) return res.status(500).json({ ok: false, error: 'serial not open' });
-
+  const serialBridge = new SerialBridge(config);
+  const uploadV3 = new UploadV3(serialBridge);
   const ee = startUpload(filePath, port, parser);
 
   ee.on('started', (info) => {
