@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const http = require('http');
+const os = require('os');
 
 const Parser = require('./lib/parser');
 
@@ -40,6 +41,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 // instantiate parser
 const parser = new Parser();
 
+// Initialize port variable (will be set if serialport loads successfully)
+let port = null;
+
 // store latest normalized status
 let latestStatus = parser._buildNormalizedStatus ? parser._buildNormalizedStatus() : { isValid: false };
 
@@ -68,7 +72,7 @@ parser.on('token', (tk) => {
 try {
   const SerialPort = require('serialport');
   const Readline = require('@serialport/parser-readline');
-  port = new SerialPort({ path: config.serialPath, baudRate: config.baudRate, autoOpen: false });
+  port = new SerialPort({ path: config.serialPath, baudRate: config.baudRate, autoOpen: false });  // port already declared above
   const parserSerial = port.pipe(new Readline({ delimiter: '\n' }));
 
   port.on('open', () => console.log('Serial opened', config.serialPath));
@@ -230,6 +234,24 @@ app.post('/print', (req, res) => {
 });
 
 const portHttp = config.port || 3000;
+
+// Get local IP address
+function getLocalIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip internal and non-IPv4 addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return 'localhost';
+}
+
+const localIP = getLocalIP();
+
 server.listen(portHttp, () => {
-  console.log(`Server listening on http://0.0.0.0:${portHttp}`);
+  console.log(`Server listening on http://${localIP}:${portHttp}`);
+  console.log(`  Also accessible at http://0.0.0.0:${portHttp}`);
 });
