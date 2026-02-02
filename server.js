@@ -9,6 +9,7 @@ const os = require('os');
 
 const Parser = require('./lib/parser');
 const { convert3mfToGcode } = require('./lib/convert_3mf');
+const { convert3wToGcode } = require('./lib/convert_3w');
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const config = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE)) : {
@@ -254,6 +255,42 @@ app.post('/upload', upload.single('file'), async (req, res) => {
       return res.status(500).json({ 
         ok: false, 
         error: `Failed to convert .3mf file: ${error.message}` 
+      });
+    }
+  }
+  
+  // Check if it's a .3w file that needs decryption
+  if (req.file.filename.toLowerCase().endsWith('.3w')) {
+    console.log('[UPLOAD] Converting .3w file:', req.file.filename);
+    try {
+      const gcodeFilename = req.file.filename.replace(/\.3w$/i, '.gcode');
+      const gcodePath = path.join(uploadsDir, gcodeFilename);
+      
+      console.log('[UPLOAD] Decrypting .3w from:', req.file.path, 'to:', gcodePath);
+      const result = await convert3wToGcode(req.file.path, gcodePath);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Decryption failed');
+      }
+      
+      // Remove the original .3w file
+      fs.unlinkSync(req.file.path);
+      
+      console.log('[UPLOAD] Decryption successful:', gcodeFilename);
+      return res.json({
+        ok: true,
+        filename: gcodeFilename,
+        size: fs.statSync(gcodePath).size,
+        converted: true,
+        originalFormat: '3w',
+        message: result.message
+      });
+    } catch (error) {
+      console.error('[UPLOAD] Decryption failed:', error.message);
+      console.error('[UPLOAD] Error stack:', error.stack);
+      return res.status(500).json({ 
+        ok: false, 
+        error: `Failed to decrypt .3w file: ${error.message}` 
       });
     }
   }

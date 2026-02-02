@@ -6,10 +6,14 @@ Features:
 - Serial connection to printer (USB)
 - Active polling for near-realtime status (mirrors miniMover request/response)
 - Web UI with control buttons: calibrate, autolevel toggle, pause/resume/cancel, home, jog, load/unload, clean nozzle, z-offset
-- **File upload with automatic .3mf to gcode conversion** for XYZ native files
+- **File upload with automatic format conversion**:
+  - **.3w files** (XYZ proprietary) → AES-decrypted to .gcode → **Ready to print**
+  - **.gcode files** → **Ready to print**
+  - **.3mf files** → Extracted to .stl → **Requires external slicing** (not printable directly)
 - Optional USB webcam print monitor via mjpg-streamer
 - Systemd service example and installer script
 - Serial auto-reconnect
+- Max 10 stored uploads with delete functionality
 
 ## Prerequisites — build & test the miniMover console (printer interface)
 
