@@ -1,8 +1,12 @@
 // public/app.js - UI client: consumes normalized 'status' objects and updates UI
 
+console.log('app.js loaded - initializing Socket.IO...');
 const socket = io();
+console.log('Socket.IO instance created:', socket);
 
 const connEl = document.getElementById('connection');
+const printerModelEl = document.getElementById('printerModel');
+const disconnectBtn = document.getElementById('disconnectBtn');
 const extruderTemp = document.getElementById('extruderTemp');
 const extruderTarget = document.getElementById('extruderTarget');
 const filamentLen = document.getElementById('filamentLen');
@@ -12,7 +16,22 @@ const jobFile = document.getElementById('jobFile');
 const jobBar = document.getElementById('jobBar');
 const jobTimes = document.getElementById('jobTimes');
 const logEl = document.getElementById('log');
-const camImg = document.getElementById('camFrame');
+
+// Button state tracking
+let isLoadingFilament = false;
+let isUnloadingFilament = false;
+let isCalibrating = false;
+let printerModel = null;
+let isNanoModel = false; // Track if it's a Nano (no manual calibration needed)
+
+// Manual filament tracking (for non-RFID filaments)
+let manualFilament = {
+  enabled: false,
+  initialLength: 0, // meters
+  startTime: null,
+  printStartLength: 0, // remaining when print started
+  printStartTime: null
+};
 
 // Filament modal elements
 const filamentModal = document.getElementById('filamentModal');
@@ -77,8 +96,18 @@ function saveFilamentProfile() {
   };
   localStorage.setItem('filamentProfile', JSON.stringify(profile));
   updateFilamentCalc();
+  
+  // Calculate length and populate the manual tracking dialog
+  const lenM = calcFilamentLengthMeters();
+  if (lenM) {
+    document.getElementById('filamentInitialLength').value = lenM.toFixed(2);
+  }
+  
   closeFilamentModal();
   updateFilamentEstimateUI();
+  
+  // Return to the load dialog
+  document.getElementById('filamentDialog').style.display = 'flex';
 }
 
 function updateFilamentEstimateUI() {
@@ -94,12 +123,49 @@ function pushLog(s) {
 }
 
 // connection status
-socket.on('connect', () => connEl.textContent = 'Connected');
-socket.on('disconnect', () => connEl.textContent = 'Disconnected');
+socket.on('connect', () => {
+  console.log('Socket.IO connected!');
+  connEl.textContent = 'Connected';
+  connEl.style.color = '#2ecc71';
+  disconnectBtn.textContent = 'Disconnect';
+});
+socket.on('disconnect', () => {
+  console.log('Socket.IO disconnected');
+  connEl.textContent = 'Disconnected';
+  connEl.style.color = '#e74c3c';
+  disconnectBtn.textContent = 'Connect';
+});
+socket.on('connect_error', (error) => {
+  console.error('Socket.IO connection error:', error);
+  connEl.textContent = 'Connection Error';
+  connEl.style.color = '#e74c3c';
+});
+socket.on('error', (error) => {
+  console.error('Socket.IO error:', error);
+});
 
 // receive normalized status
 socket.on('status', (st) => {
   if (!st) return;
+  
+  // Update printer model/SN display - only update if we have actual data
+  if (st.model && st.serialNumber) {
+    printerModelEl.textContent = `${st.model} | SN: ${st.serialNumber}`;
+    printerModel = st.model;
+  } else if (st.model) {
+    printerModelEl.textContent = st.model;
+    printerModel = st.model;
+  }
+  // Don't overwrite with generic text if we haven't received model data yet
+  
+  // Detect if it's a Nano model (automatic calibration only)
+  if (printerModel && printerModel.toLowerCase().includes('nano')) {
+    isNanoModel = true;
+  } else if (printerModel) {
+    // Non-Nano model detected - may need manual calibration buttons
+    isNanoModel = false;
+  }
+  
   // extruder
   if (st.extruderActual_C !== null && st.extruderActual_C !== undefined) {
     extruderTemp.textContent = `${st.extruderActual_C} °C`;
@@ -113,16 +179,72 @@ socket.on('status', (st) => {
     // optionally display bed in the extruder tile if you prefer
   }
 
-  // filament
-  if (st.filamentRemaining_mm !== null && st.filamentRemaining_mm !== undefined) {
+  // filament - check if filament is actually loaded using status flags
+  // fm=1 means filament mounted, fd=1 means filament detected
+  // Handle both number and string comparisons, and be lenient if flags aren't available
+  const hasFilament = (st.filamentMounted == 1 || st.filamentDetected == 1) || 
+                      ((st.filamentMounted === null || st.filamentMounted === undefined) && 
+                       st.filamentRemaining_mm !== null && st.filamentRemaining_mm > 0) ||
+                      (st.filamentSerial && st.filamentSerial.length > 0) ||
+                      (st.filamentInfo && st.filamentInfo.length > 0 && st.filamentInfo[0]);
+  
+  // Update manual tracking if print is running
+  if (manualFilament.enabled && st.printPercent > 0 && st.printPercent < 100) {
+    if (!manualFilament.printStartTime) {
+      // Print just started
+      manualFilament.printStartTime = Date.now();
+      manualFilament.printStartLength = manualFilament.initialLength;
+    }
+  } else if (manualFilament.enabled && (st.printPercent === 0 || st.printPercent >= 100)) {
+    // Print finished or not running - reset print tracking
+    if (manualFilament.printStartTime) {
+      manualFilament.printStartTime = null;
+    }
+  }
+  
+  if (st.filamentRemaining_mm !== null && st.filamentRemaining_mm !== undefined && st.filamentRemaining_mm > 0) {
     const m = (st.filamentRemaining_mm / 10000.0).toFixed(2);
     filamentLen.textContent = `${m} m`;
+    filamentEst.textContent = ''; // Clear estimate when actual value is available
+    // Hide manual tracking when RFID data available
+    document.getElementById('filamentManual').style.display = 'none';
+    manualFilament.enabled = false;
+  } else if (manualFilament.enabled && manualFilament.initialLength > 0) {
+    // Manual tracking for non-RFID filament
+    let remainingM = manualFilament.initialLength;
+    let usedM = 0;
+    
+    // Estimate consumption based on print progress and time
+    if (manualFilament.printStartTime && st.printPercent > 0) {
+      // Rough estimate: assume linear consumption with print percentage
+      // This is not perfect but better than nothing
+      const consumptionRate = manualFilament.printStartLength * (st.printPercent / 100);
+      usedM = consumptionRate;
+      remainingM = Math.max(0, manualFilament.printStartLength - usedM);
+    }
+    
+    filamentLen.textContent = `${remainingM.toFixed(2)} m`;
+    filamentEst.textContent = '';
+    document.getElementById('filamentManualUsed').textContent = `${usedM.toFixed(2)} m`;
+    document.getElementById('filamentManual').style.display = 'block';
   } else {
+    // No filament length data
+    filamentLen.textContent = '-- m';
     const est = calcFilamentLengthMeters();
-    filamentLen.textContent = est ? `${est.toFixed(2)} m` : '-- m';
+    filamentEst.textContent = est ? `Spool est: ${est.toFixed(2)} m` : '';
+    document.getElementById('filamentManual').style.display = 'none';
   }
-  if (st.filamentSerial) filamentName.textContent = st.filamentSerial;
-  else filamentName.textContent = (st.filamentInfo && st.filamentInfo[0]) ? st.filamentInfo[0] : '--';
+  
+  // Show filament info if we have it, regardless of flags (factory spools always have serial)
+  if (st.filamentSerial && st.filamentSerial.length > 0) {
+    filamentName.textContent = st.filamentSerial;
+  } else if (st.filamentInfo && st.filamentInfo.length > 0 && st.filamentInfo[0]) {
+    filamentName.textContent = st.filamentInfo[0];
+  } else if (hasFilament) {
+    filamentName.textContent = 'Filament loaded';
+  } else {
+    filamentName.textContent = 'No filament loaded';
+  }
 
   updateFilamentEstimateUI();
 
@@ -169,29 +291,107 @@ socket.on('calibrate', (ev) => {
   if (!ev || !ev.parsed) return;
   const stage = ev.parsed.stage || ev.parsed.stat || ev.parsed.raw;
   pushLog(`Calibrate event: ${stage}`);
-  // Update UI hints
+  
+  // Nano model has fully automatic calibration, other models may need manual steps
   if (stage === 'pressdetector' || stage === 'start') {
-    pushLog('Please LOWER detector on printer, then click "Lower Detector Done"');
+    if (isNanoModel) {
+      pushLog('Calibration starting (automatic)...');
+    } else {
+      pushLog('Please LOWER probe on printer, then click "Lower Probe Done"');
+      isCalibrating = true;
+      document.getElementById('cal_lower').style.display = 'inline-block';
+      document.getElementById('cal_raise').style.display = 'none';
+      document.getElementById('cal_start').style.display = 'none';
+    }
   } else if (stage === 'processing') {
     pushLog('Calibration processing...');
   } else if (stage === 'ok') {
-    pushLog('Calibration OK. Please RAISE detector and click "Raise Detector Done"');
+    if (isNanoModel) {
+      pushLog('Calibration OK.');
+    } else {
+      pushLog('Calibration OK. Please RAISE probe and click "Raise Probe Done"');
+      document.getElementById('cal_lower').style.display = 'none';
+      document.getElementById('cal_raise').style.display = 'inline-block';
+    }
+    
+    // Parse calibration sensor values if available
+    if (ev.parsed.values && Array.isArray(ev.parsed.values) && ev.parsed.values.length === 9) {
+      analyzeBedLevel(ev.parsed.values);
+    }
   } else if (stage === 'complete') {
     pushLog('Calibration complete.');
-  } else if (stage === 'fail') {
-    pushLog('Calibration failed. Try again.');
+    isCalibrating = false;
+    if (!isNanoModel) {
+      document.getElementById('cal_lower').style.display = 'none';
+      document.getElementById('cal_raise').style.display = 'none';
+      document.getElementById('cal_start').style.display = 'inline-block';
+    }
+    document.getElementById('bedAdjust').style.display = 'none';
+  } else if (stage.includes('fail') || stage.includes('unlevel')) {
+    pushLog('Calibration failed. Please adjust bed manually and try again.');
+    // Parse calibration sensor values for adjustment guidance
+    if (ev.parsed.values && Array.isArray(ev.parsed.values) && ev.parsed.values.length === 9) {
+      analyzeBedLevel(ev.parsed.values);
+    }
   }
 });
 
-// webcam
+// Analyze bed level sensor readings and provide adjustment guidance
+function analyzeBedLevel(values) {
+  // Values are 9 bed level sensor readings from calibration
+  // Typical layout for Da Vinci printers:
+  // 0 1 2
+  // 3 4 5  
+  // 6 7 8
+  // Front-left and front-right typically have adjustment knobs (positions 6 and 8 for Nano)
+  
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+  const threshold = 15; // Tolerance in sensor units
+  
+  const frontLeft = values[6];  // Front-left sensor
+  const frontRight = values[8]; // Front-right sensor
+  
+  const instructions = [];
+  
+  if (Math.abs(frontLeft - avg) > threshold) {
+    const diff = frontLeft - avg;
+    const direction = diff > 0 ? 'counterclockwise' : 'clockwise';
+    const steps = Math.ceil(Math.abs(diff) / 10);
+    instructions.push(`Front-left knob: Turn ${direction} ${steps} click${steps > 1 ? 's' : ''}`);
+  }
+  
+  if (Math.abs(frontRight - avg) > threshold) {
+    const diff = frontRight - avg;
+    const direction = diff > 0 ? 'counterclockwise' : 'clockwise';
+    const steps = Math.ceil(Math.abs(diff) / 10);
+    instructions.push(`Front-right knob: Turn ${direction} ${steps} click${steps > 1 ? 's' : ''}`);
+  }
+  
+  if (instructions.length > 0) {
+    document.getElementById('bedAdjustInstructions').innerHTML = instructions.join('<br>');
+    document.getElementById('bedAdjust').style.display = 'block';
+    pushLog('Bed adjustment needed - see calibration section');
+  } else {
+    document.getElementById('bedAdjust').style.display = 'none';
+  }
+}
+
+// webcam (deprecated - using mjpg-streamer instead)
 socket.on('frame', (f) => {
-  if (f && f.b64) camImg.src = 'data:image/jpeg;base64,' + f.b64;
+  // Frame handling disabled - using direct camera stream
 });
 
 // Buttons
-document.getElementById('cal_start').onclick = () => socket.emit('command', { action: 'calibrate_start' });
-document.getElementById('cal_lower').onclick = () => socket.emit('command', { action: 'calibrate_detector_lowered' });
-document.getElementById('cal_raise').onclick = () => socket.emit('command', { action: 'calibrate_detector_raised' });
+document.getElementById('cal_start').onclick = () => {
+  socket.emit('command', { action: 'calibrate_start' });
+  pushLog('Starting calibration...');
+};
+document.getElementById('cal_lower').onclick = () => {
+  socket.emit('command', { action: 'calibrate_detector_lowered' });
+};
+document.getElementById('cal_raise').onclick = () => {
+  socket.emit('command', { action: 'calibrate_detector_raised' });
+};
 document.getElementById('toggle_autolevel').onclick = () => {
   const en = confirm('Enable auto-level? OK=yes, Cancel=no');
   socket.emit('command', { action: 'toggle_autolevel', enable: en });
@@ -209,14 +409,101 @@ document.getElementById('cancel').onclick = () => {
   socket.emit('command', { action: 'cancel', token });
 };
 document.getElementById('home').onclick = () => socket.emit('command', { action: 'home' });
+
+// Load/Unload filament with conditional button visibility
 document.getElementById('load').onclick = () => {
-  socket.emit('command', { action: 'load_filament' });
+  // Show manual tracking dialog
+  document.getElementById('filamentDialog').style.display = 'flex';
+  document.getElementById('filamentInitialLength').value = '';
+};
+
+document.getElementById('filamentDialogCalc').onclick = () => {
+  // Open weight calculator modal
   openFilamentModal();
 };
-document.getElementById('load_stop').onclick = () => socket.emit('command', { action: 'load_filament_stop' });
-document.getElementById('unload').onclick = () => socket.emit('command', { action: 'unload_filament' });
-document.getElementById('unload_stop').onclick = () => socket.emit('command', { action: 'unload_filament_stop' });
+
+document.getElementById('filamentDialogSkip').onclick = () => {
+  // Skip manual tracking - just start load (RFID filament)
+  document.getElementById('filamentDialog').style.display = 'none';
+  manualFilament.enabled = false;
+  socket.emit('command', { action: 'load_filament' });
+  isLoadingFilament = true;
+  document.getElementById('load_stop').style.display = 'inline-block';
+};
+
+document.getElementById('filamentDialogStart').onclick = () => {
+  const initialLength = parseFloat(document.getElementById('filamentInitialLength').value);
+  document.getElementById('filamentDialog').style.display = 'none';
+  
+  if (initialLength && initialLength > 0) {
+    // Enable manual tracking
+    manualFilament.enabled = true;
+    manualFilament.initialLength = initialLength;
+    manualFilament.startTime = Date.now();
+    manualFilament.printStartLength = 0;
+    manualFilament.printStartTime = null;
+    pushLog(`Manual tracking enabled: ${initialLength} m initial`);
+  } else {
+    manualFilament.enabled = false;
+  }
+  
+  socket.emit('command', { action: 'load_filament' });
+  isLoadingFilament = true;
+  document.getElementById('load_stop').style.display = 'inline-block';
+};
+
+document.getElementById('load_stop').onclick = () => {
+  socket.emit('command', { action: 'load_filament_stop' });
+  isLoadingFilament = false;
+  document.getElementById('load_stop').style.display = 'none';
+};
+
+document.getElementById('unload').onclick = () => {
+  // Show final tally before unloading
+  if (manualFilament.enabled) {
+    const used = manualFilament.initialLength - (manualFilament.printStartLength || manualFilament.initialLength);
+    const remaining = manualFilament.printStartLength || manualFilament.initialLength;
+    pushLog(`Unload Summary: Used ${used.toFixed(2)} m, Remaining ${remaining.toFixed(2)} m`);
+    alert(`Filament Summary:\nInitial: ${manualFilament.initialLength.toFixed(2)} m\nUsed: ${used.toFixed(2)} m\nRemaining: ${remaining.toFixed(2)} m`);
+  }
+  
+  socket.emit('command', { action: 'unload_filament' });
+  isUnloadingFilament = true;
+  document.getElementById('unload_stop').style.display = 'inline-block';
+};
+
+document.getElementById('unload_stop').onclick = () => {
+  socket.emit('command', { action: 'unload_filament_stop' });
+  isUnloadingFilament = false;
+  document.getElementById('unload_stop').style.display = 'none';
+  
+  // Reset manual tracking on unload
+  manualFilament.enabled = false;
+  manualFilament.initialLength = 0;
+  manualFilament.startTime = null;
+  manualFilament.printStartLength = 0;
+  manualFilament.printStartTime = null;
+  document.getElementById('filamentManual').style.display = 'none';
+};
+
 document.getElementById('clean_nozzle').onclick = () => socket.emit('command', { action: 'clean_nozzle' });
+
+// Disconnect/Reconnect button
+disconnectBtn.onclick = () => {
+  const btnText = disconnectBtn.textContent.trim();
+  if (btnText === 'Disconnect') {
+    socket.disconnect();
+    disconnectBtn.textContent = 'Connect';
+    connEl.textContent = 'Disconnected';
+    connEl.style.color = '#e74c3c';
+  } else {
+    socket.connect();
+    // Status will update when 'connect' event fires
+    connEl.textContent = 'Connecting...';
+    connEl.style.color = '#f39c12';
+  }
+};
+
 document.getElementById('setZ').onclick = () => {
   const off = parseInt(document.getElementById('zoff').value || '0', 10);
   socket.emit('command', { action: 'set_zoffset', offset: off });
@@ -397,22 +684,65 @@ filamentMaterial.addEventListener('change', () => {
 filamentClose.addEventListener('click', closeFilamentModal);
 filamentSave.addEventListener('click', saveFilamentProfile);
 
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
   refreshUploads();
   updateFilamentEstimateUI();
   
-  // Try to load MJPG stream, fallback to socket.io frames on error
-  const mjpgStream = document.getElementById('mjpgStream');
-  const camFrame = document.getElementById('camFrame');
+  // Camera stream handling with Edge browser compatibility
+  const camStream = document.getElementById('camStream');
   
-  const streamUrl = `http://${window.location.hostname}:8080/?action=stream`;
-  console.log('Attempting to load camera stream from:', streamUrl);
+  // Get camera URL and FPS from server (handles localhost vs IP address issue)
+  let baseUrl;
+  let cameraFps = 15; // Default to 15fps
+  try {
+    const response = await fetch('/api/camera-url');
+    const data = await response.json();
+    baseUrl = data.cameraUrl;
+    cameraFps = data.fps || 15;
+    console.log('Using camera URL:', baseUrl, 'at', cameraFps, 'fps');
+  } catch (err) {
+    // Fallback to using window location
+    baseUrl = `http://${window.location.hostname}:8080`;
+    console.log('Failed to get camera URL from server, using fallback:', baseUrl);
+  }
   
-  mjpgStream.src = streamUrl;
-  mjpgStream.onload = () => console.log('Camera stream loaded successfully');
-  mjpgStream.onerror = () => {
-    console.log('MJPG stream failed, using socket.io fallback');
-    mjpgStream.style.display = 'none';
-    camFrame.style.display = 'block';
-  };
+  const snapshotInterval = Math.round(1000 / cameraFps); // Convert FPS to milliseconds
+  let snapshotTimer = null;
+  
+  function startSnapshotMode() {
+    console.log(`Using snapshot mode for camera at ${cameraFps}fps (${snapshotInterval}ms interval)`);
+    
+    // Refresh snapshot at configured FPS
+    snapshotTimer = setInterval(() => {
+      camStream.src = `${baseUrl}/?action=snapshot&_t=${Date.now()}`;
+    }, snapshotInterval);
+  }
+  
+  // Detect if browser is Edge or doesn't support MJPEG well
+  const isEdge = /Edg/.test(navigator.userAgent);
+  
+  if (isEdge) {
+    // Edge doesn't handle MJPEG streams well, use snapshot mode
+    console.log('Edge browser detected, using snapshot mode');
+    startSnapshotMode();
+  } else {
+    // Try MJPEG stream for Chrome/Firefox
+    const streamUrl = `${baseUrl}/?action=stream`;
+    console.log('Attempting MJPEG stream from:', streamUrl);
+    
+    camStream.onerror = () => {
+      console.log('MJPEG stream failed, switching to snapshot mode');
+      startSnapshotMode();
+    };
+    
+    camStream.src = streamUrl;
+    
+    // Fallback: if stream doesn't load within 3 seconds, use snapshots
+    setTimeout(() => {
+      if (!camStream.complete || camStream.naturalHeight === 0) {
+        console.log('MJPEG stream timeout, switching to snapshot mode');
+        startSnapshotMode();
+      }
+    }, 3000);
+  }
 });

@@ -79,33 +79,17 @@ Node.js/Express web dashboard for controlling a Minimover XYZ 3D printer via ser
 - Auto-refresh in dashboard
 
 ### 3. File Upload System
-- Accepts: `.gcode`, `.txt`, `.3mf`, `.3w`
-- **Printable formats**: `.gcode` and `.3w` (auto-decrypted)
-- **Non-printable**: `.3mf` (extracts to .stl, requires external slicing)
+- Accepts: `.gcode`, `.txt`, `.3w`
+- **Printable formats**: `.gcode` and `.3w` (auto-decrypted from deprecated XYZ format)
+- **Mesh files** (STL, .3mf, etc.): Must be sliced externally to gcode before uploading
 - Upload progress bar
-- Multer fileFilter updated to accept all supported formats
+- Multer fileFilter updated to accept supported formats
 - Upload directory: `uploads/`
 - **Max 10 stored uploads** (sorted by modification time, newest first)
 - **Delete button** for each file with confirmation dialog
-- Automatic format conversion on upload
+- Automatic .3w decryption on upload
 
-### 4. .3mf File Handling (MESH FILES - NOT PRINTABLE)
-**Important**: .3mf files from XYZ printers contain 3D mesh data (vertices/triangles in XML), NOT pre-sliced gcode. **These files cannot be printed directly** and must be sliced externally with XYZware or similar software.
-
-**Implementation**:
-- Extract .3mf archive (ZIP format)
-- Search for embedded gcode first (usually not present)
-- If no gcode found: Extract 3D mesh from `3D/3dmodel.model` XML
-- Convert mesh to STL ASCII format
-- Save as `.stl` file alongside original `.3mf`
-- **User must slice STL externally before printing**
-
-**File**: `lib/convert_3mf.js`
-- `convert3mfToGcode()` - Main extraction function (misnomer - actually extracts STL)
-- `extractMeshToSTL()` - Parses XML mesh (vertices, triangles), generates STL
-- Uses unzip utility for extraction
-
-### 5. .3w File Handling (XYZ PROPRIETARY - READY TO PRINT)
+### 4. .3w File Handling (DEPRECATED XYZ PROPRIETARY FORMAT - BACKWARD COMPATIBILITY)
 **Important**: .3w is the actual proprietary format used by XYZ Da Vinci printers for pre-sliced gcode. **These files are ready to print after decryption.**
 
 **Implementation** (based on miniMover):
@@ -139,23 +123,13 @@ Node.js/Express web dashboard for controlling a Minimover XYZ 3D printer via ser
 ## Files Modified in Session
 
 ### server.js
-- Added `.3mf` STL extraction with debug logging
 - Added `.3w` AES decryption with debug logging
 - Added `DELETE /uploads/:filename` endpoint for file deletion
 - Modified `GET /uploads` to return only 10 most recent files
 - Comprehensive error logging: `[UPLOAD]` prefixed logs
-- Import: `const { convert3mfToGcode } = require('./lib/convert_3mf')`
 - Import: `const { convert3wToGcode } = require('./lib/convert_3w')`
 - Import: `const { upload, uploadsDir } = require('./lib/upload')`
-- Upload endpoint handles .3w, .3mf, and .gcode files with automatic conversion
-
-### lib/convert_3mf.js (CREATED)
-- Extracts .3mf ZIP archive to temp directory
-- Searches multiple locations for embedded gcode
-- Falls back to STL extraction if no gcode found
-- `extractMeshToSTL()`: Parses XML mesh, generates ASCII STL
-- Calculates surface normals for each triangle
-- Returns: `{ success, outputPath, format: 'stl', message }`
+- Upload endpoint handles .3w and .gcode files with automatic .3w decryption
 
 ### lib/convert_3w.js (CREATED)
 - Decrypts XYZ Da Vinci .3w files to gcode
@@ -169,20 +143,20 @@ Node.js/Express web dashboard for controlling a Minimover XYZ 3D printer via ser
 - Returns: `{ success, outputPath, message }`
 
 ### lib/upload.js
-- Updated fileFilter: `if (ext === '.gcode' || ext === '.txt' || ext === '.3mf' || ext === '.3w')`
+- Updated fileFilter: `if (ext === '.gcode' || ext === '.txt' || ext === '.3w')`
 - Changed exports: `module.exports = { upload, uploadsDir: uploadDir }`
-- Accepts all supported print file formats
+- Accepts gcode and .3w (deprecated XYZ format) files
 
 ### public/index.html
 - Removed duplicate `<section id="camera">` and `<section id="uploads">`
-- Updated file input: `accept=".gcode,.3mf,.3w"`
-- Help text: "Accepts: .gcode, .3w (XYZ), or .3mf"
+- Updated file input: `accept=".gcode,.3w"`
+- Help text: "Accepts: .gcode or .3w (deprecated XYZ format)"
 - Changed calibration buttons: "Lower Probe Done", "Raise Probe Done"
 - Layout: 3-column grid for 1024x720 resolution
 
 ### public/app.js
 - Added delete button for each upload with confirmation
-- Shows conversion status for .3mf: `Uploaded ${res.filename} (converted from ${res.originalFormat})`
+- Shows conversion status for .3w: `Uploaded ${res.filename} (decrypted from .3w)`
 - Delete handler: `DELETE /uploads/${filename}` with refresh on success
 - Upload list limited to 10 files (server-side)
 
@@ -216,37 +190,6 @@ Offset   Content
          - PKCS7 padding
 ```
 
-### .3mf Format Structure
-```
-.3mf file (ZIP archive)
-├── _rels/.rels
-├── [Content_Types].xml
-├── 3D/
-│   └── 3dmodel.model (XML with mesh data)
-└── Metadata/
-    └── thumbnail.png
-```
-
-**3dmodel.model XML structure**:
-```xml
-<model>
-  <resources>
-    <object id="1">
-      <mesh>
-        <vertices>
-          <vertex x="6.622" y="-1.250" z="19.689" />
-          <!-- ... thousands of vertices ... -->
-        </vertices>
-        <triangles>
-          <triangle v1="0" v2="1" v3="2" />
-          <!-- ... thousands of triangles ... -->
-        </triangles>
-      </mesh>
-    </object>
-  </resources>
-</model>
-```
-
 ### XYZv3 Protocol
 - Simple line-based protocol
 - Commands: Home, Calibrate, Load/Unload filament, Jog, etc.
@@ -258,43 +201,37 @@ Offset   Content
 - Server running on port 3000
 - Camera streaming on port 8080
 - Serial communication with printer
-- File uploads (.gcode, .txt, .3mf)
-- .3mf to STL extraction
+- File uploads (.gcode, .txt, .3w)
+- .3w decryption (backward compatibility for deprecated XYZ format)
 - Upload list with Print/Delete buttons
 - 10-file limit on stored uploads
 - Dashboard layout optimized for 1024x720
 
 ## Important Notes for Continuation
 
-1. **.3mf files require external slicing**: The extracted STL must be sliced with XYZware or similar before printing.
+1. **Mesh files require external slicing**: All mesh files (STL, .3mf, OBJ, etc.) must be sliced with user's preferred slicer and converted to gcode before uploading.
 
-2. **Serial port detection**: Auto-detects `/dev/ttyACM0`. May need adjustment if printer is on different port.
+2. **.3w format**: Deprecated XYZ proprietary format. Converter provided for backward compatibility only. Modern workflow uses standard gcode.
 
-3. **Service management**:
+3. **Serial port detection**: Auto-detects `/dev/ttyACM0`. May need adjustment if printer is on different port.
+
+4. **Service management**:
    ```bash
    sudo systemctl restart mjpg-streamer
    sudo systemctl status mjpg-streamer
    node server.js  # Run server
    ```
 
-4. **File locations**:
+5. **File locations**:
    - Uploads: `/home/maker2/Minimover-XYZ-printer-Dashboard/uploads/`
-   - Temp extraction: `/tmp/` (cleaned up automatically)
+   - Temp files: `/tmp/` (cleaned up automatically)
 
-5. **Dependencies**: All in package.json. Key ones:
+6. **Dependencies**: All in package.json. Key ones:
    - express, socket.io, multer, serialport
-   - System: unzip (for .3mf extraction)
 
 ## Debugging Commands Used
 
 ```bash
-# Test .3mf extraction
-unzip -d /tmp/test_3mf uploads/3DBenchy-1.3mf
-cat /tmp/test_3mf/3D/3dmodel.model | grep -A5 "<mesh>"
-
-# Check for gcode in .3mf
-grep -r "G0\|G1\|M104" /tmp/test_3mf/
-
 # Kill running server
 lsof -ti:3000 | xargs kill -9
 pkill -9 -f "node.*server.js"
@@ -306,12 +243,11 @@ journalctl -u mjpg-streamer -n 50
 
 ## Future Considerations
 
-1. Binary STL format (currently ASCII) for smaller file sizes
-2. Auto-slicing integration (would require slicer installation)
-3. File size limits for uploads
-4. Auto-cleanup of old uploads beyond 10 files
-5. Better error messages for unsupported .3mf variants
-6. WebSocket-based upload progress instead of XHR
+1. File size limits for uploads
+2. Auto-cleanup of old uploads beyond 10 files
+3. WebSocket-based upload progress instead of XHR
+4. Optional auto-slicing integration (would require slicer installation)
+5. Support for additional gcode variants from different slicers
 
 ## Configuration Files
 
@@ -332,71 +268,54 @@ Main dependencies: express, socket.io, multer, serialport
 ### Upload Handler Pattern (server.js)
 ```javascript
 app.post('/upload', upload.single('file'), async (req, res) => {
-  if (req.file.originalname.toLowerCase().endsWith('.3mf')) {
-    const result = await convert3mfToGcode(req.file.path, outputPath);
-    // Handle conversion result
+  if (req.file.originalname.toLowerCase().endsWith('.3w')) {
+    const result = await convert3wToGcode(req.file.path, outputPath);
+    // Handle decryption result
   }
 });
-```
-
-### STL Generation Pattern (lib/convert_3mf.js)
-```javascript
-async function extractMeshToSTL(modelPath, stlPath) {
-  const xml = fs.readFileSync(modelPath, 'utf8');
-  // Parse vertices with regex
-  // Parse triangles with regex
-  // Generate ASCII STL format
-  fs.writeFileSync(stlPath, stlContent);
-}
 ```
 
 ## Testing Status
 - Camera feed: ✅ Working
 - File upload (.gcode): ✅ Working
-- File upload (.3mf): ✅ Working (extracts to STL)
 - File upload (.3w): ✅ Working (decrypts to gcode)
 - .3w decryption: ✅ Tested with 3DBenchy.3w (57,562 lines)
-- STL extraction: ✅ Implemented (not yet tested with actual print)
 - Delete files: ✅ Working
 - 10-file limit: ✅ Working
 - Serial communication: ✅ Connected to /dev/ttyACM0
 
 ## Last Session Summary
-Completed dashboard polish, fixed camera streaming, implemented .3mf STL extraction, added file deletion and 10-file limit. All systems operational and ready for user testing.
+Completed dashboard polish, fixed camera streaming, implemented .3w decryption for backward compatibility with deprecated XYZ format, added file deletion and 10-file limit. Removed .3mf mesh extraction - users must slice mesh files externally. All systems operational and ready for user testing.
 
 ---
 
 ## Session History
 
-### Session 2026-02-01 - Dashboard UI Polish, .3mf STL Extraction & .3w Decryption
+### Session 2026-02-01 - Dashboard UI Polish & .3w Decryption
 **Changes Made:**
 - Fixed dashboard layout for 1024x720 resolution, removed duplicate sections
 - Configured and fixed mjpg-streamer camera service
 - Changed "Detector" to "Probe" in calibration buttons
-- Implemented .3mf file upload support
-- Discovered .3mf files contain 3D mesh data (not gcode)
-- Implemented STL extraction from .3mf mesh data
-- **Discovered .3w is the actual XYZ proprietary format (not .3mf)**
-- **Implemented .3w AES decryption based on miniMover**
+- **Discovered .3w is the deprecated XYZ proprietary format**
+- **Implemented .3w AES decryption based on miniMover for backward compatibility**
 - **Supports both CBC and ECB encryption modes**
 - Added delete button for uploads with confirmation
 - Limited stored uploads to 10 most recent files
+- Removed .3mf mesh extraction - users must slice externally
 - Updated documentation (README.md and PROJECT_CONTEXT.md)
 
 **Issues Resolved:**
 - mjpg-streamer not starting (fixed eval variable expansion)
-- .3mf files rejected by multer (updated fileFilter)
 - Duplicate UI sections appearing below dashboard
 - Port 3000 conflicts (added proper kill commands)
-- .3w vs .3mf confusion - identified correct format for XYZ printers
+- Clarified .3w is for deprecated format backward compatibility
 
 **Current State:**
 - ✅ All core features operational
 - ✅ Camera streaming working
-- ✅ File uploads functional (.gcode, .txt, .3mf, .3w)
+- ✅ File uploads functional (.gcode, .txt, .3w)
 - ✅ .3w decryption working (tested with 3DBenchy.3w)
-- ✅ STL extraction implemented (needs real-world testing)
 - ✅ UI polished and responsive
-- ✅ Documentation updated
+- ✅ Documentation updated and accurate
 
 **Next Agent: Please add your session entry above this one, keeping chronological order (newest first)**

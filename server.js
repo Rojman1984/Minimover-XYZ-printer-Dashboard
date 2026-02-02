@@ -19,6 +19,7 @@ const config = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FI
   enableWebcam: true,
   webcamIntervalMs: 500,
   webcamDevice: '/dev/video0',
+  cameraFps: 15, // Camera framerate (max 30fps, lower for slower Pi models)
   // Optional basic auth
   port: 3000
 };
@@ -38,6 +39,28 @@ const UploadV3 = require('./lib/upload_v3');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Endpoint to get camera configuration
+app.get('/api/camera-url', (req, res) => {
+  // Try to get the server's actual IP address
+  const interfaces = os.networkInterfaces();
+  let serverIp = null;
+  
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip internal and non-IPv4 addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        serverIp = iface.address;
+        break;
+      }
+    }
+    if (serverIp) break;
+  }
+  
+  const cameraUrl = serverIp ? `http://${serverIp}:8080` : `http://${req.hostname}:8080`;
+  const fps = Math.min(Math.max(config.cameraFps || 15, 1), 30); // Clamp between 1-30fps
+  res.json({ cameraUrl, fps });
+});
 
 // instantiate parser
 const parser = new Parser();
@@ -146,7 +169,9 @@ setInterval(() => {
 // Socket.io endpoints (UI -> server)
 io.on('connection', (socket) => {
   console.log('Client connected');
+  // Send current status immediately on connection
   socket.emit('status', latestStatus);
+  console.log('Sent initial status to client:', { model: latestStatus.model, serialNumber: latestStatus.serialNumber });
 
   socket.on('command', (cmd) => {
     switch (cmd.action) {
@@ -185,12 +210,16 @@ io.on('connection', (socket) => {
         break;
       case 'load_filament_stop':
         sendRaw('XYZv3/action=load:cancel');
+        // Query filament status after load completes
+        setTimeout(() => sendRaw('XYZv3/query=wf'), 1000);
         break;
       case 'unload_filament':
         sendRaw('XYZv3/action=unload:new');
         break;
       case 'unload_filament_stop':
         sendRaw('XYZv3/action=unload:cancel');
+        // Query filament status after unload completes
+        setTimeout(() => sendRaw('XYZv3/query=wf'), 1000);
         break;
       case 'clean_nozzle':
         sendRaw('XYZv3/action=cleannozzle:new');

@@ -9,7 +9,11 @@
 <body>
   <header>
     <h1>miniMover Dashboard</h1>
-    <div id="connection">Connecting...</div>
+    <div id="printerModel" style="font-size:14px; color:#ccc; margin:4px 0;">Printer Model</div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <div id="connection">Connecting...</div>
+      <button id="disconnectBtn" style="padding:4px 12px; font-size:12px;">Disconnect</button>
+    </div>
   </header>
 
   <main>
@@ -25,6 +29,7 @@
         <div class="big" id="filamentLen">-- m</div>
         <div class="small" id="filamentEst">--</div>
         <div id="filamentName" style="font-size:11px;">--</div>
+        <div id="filamentManual" style="font-size:10px; color:#888; margin-top:2px; display:none;">Manual: <span id="filamentManualUsed">--</span> used</div>
       </div>
 
       <div class="tile" id="job">
@@ -41,22 +46,24 @@
       <section id="camera">
         <h3>Print Monitor</h3>
         <div id="cameraBox">
-          <img id="mjpgStream" alt="MJPEG stream" />
-          <img id="camFrame" style="display:none" alt="camera frame" />
+          <img id="camStream" alt="camera stream" />
         </div>
       </section>
 
       <section id="uploads">
         <h3>Uploads & Print</h3>
         <div class="uploadRow">
-          <input type="file" id="uploadFile" accept=".gcode,.3mf,.3w" />
+          <input type="file" id="uploadFile" accept=".gcode,.3w" />
           <button id="uploadBtn">Upload</button>
         </div>
         <div class="uploadProgress">
           <div id="uploadProgressBar" style="width:0%">0%</div>
         </div>
         <div id="uploadStatus" style="font-size:11px; margin:4px 0;"></div>
-        <div style="font-size:10px; color:#666; margin:4px 0;">Mesh files (.STL, .3MF, .OBJ, .STP...etc) need to be sliced first.</div>
+        <div style="font-size:10px; color:#666; margin:4px 0;">
+          Accepts: .gcode or .3w (deprecated XYZ format).<br>
+          Mesh files (.STL, .3MF, .OBJ, etc.) must be sliced to gcode first.
+        </div>
         <h4>Stored uploads</h4>
         <ul id="uploadsList"></ul>
       </section>
@@ -64,29 +71,62 @@
 
     <section id="controls">
       <h3>Controls</h3>
-      <div class="btnRow">
-        <button id="cal_start">Calibrate Start</button>
-        <button id="cal_lower">Lower Probe Done</button>
-        <button id="cal_raise">Raise Probe Done</button>
-      </div>
-      <div class="btnRow">
-        <button id="toggle_autolevel">Toggle Auto-Level</button>
-        <button id="pause">Pause</button>
-        <button id="resume">Resume</button>
-        <button id="cancel">Cancel</button>
-      </div>
-      <div class="btnRow">
-        <button id="home">Home</button>
-        <button id="load">Load Filament</button>
-        <button id="load_stop">Stop Load</button>
-      </div>
-      <div class="btnRow">
-        <button id="unload">Unload Filament</button>
-        <button id="unload_stop">Stop Unload</button>
-        <button id="clean_nozzle">Clean Nozzle</button>
-      </div>
+      <div style="display:flex; gap:10px;">
+        <div style="flex:1;">
+          <!-- Job Control Section -->
+          <div class="controlGroup">
+            <h4>Job Control</h4>
+            <div class="btnRow">
+              <button id="pause">Pause</button>
+              <button id="resume">Resume</button>
+              <button id="cancel">Cancel</button>
+            </div>
+          </div>
 
-      <div style="display:flex; gap:12px; margin-top:12px;">
+          <!-- Calibration Section -->
+          <div class="controlGroup">
+            <h4>Calibration</h4>
+            <div class="btnRow">
+              <button id="cal_start">Start Calibration</button>
+              <button id="cal_lower" style="display:none;">Lower Probe Done</button>
+              <button id="cal_raise" style="display:none;">Raise Probe Done</button>
+            </div>
+            <div class="btnRow">
+              <button id="toggle_autolevel">Toggle Auto-Level</button>
+            </div>
+            <div id="bedAdjust" style="display:none; margin-top:8px; padding:8px; background:#fff3cd; border-left:3px solid #ffc107; border-radius:4px;">
+              <div style="font-weight:600; font-size:12px; margin-bottom:4px;">Bed Level Adjustment Needed</div>
+              <div id="bedAdjustInstructions" style="font-size:11px;"></div>
+            </div>
+          </div>
+
+          <!-- Filament Control Section -->
+          <div class="controlGroup">
+            <h4>Filament Control</h4>
+            <div class="btnRow">
+              <button id="load">Load Filament</button>
+              <button id="load_stop" style="display:none;">Stop Load</button>
+            </div>
+            <div class="btnRow">
+              <button id="unload">Unload Filament</button>
+              <button id="unload_stop" style="display:none;">Stop Unload</button>
+            </div>
+          </div>
+
+          <!-- Movement & Maintenance Section -->
+          <div class="controlGroup">
+            <h4>Movement & Maintenance</h4>
+            <div class="btnRow">
+              <button id="home">Home All Axes</button>
+              <button id="clean_nozzle">Clean Nozzle</button>
+            </div>
+            <div class="zRow">
+              <label>Z offset: <input id="zoff" type="number" step="1" value="0"/></label>
+              <button id="setZ">Set</button>
+            </div>
+          </div>
+        </div>
+
         <div>
           <h4 style="margin:0 0 6px 0;">Jog Controls</h4>
           <div class="jogGrid">
@@ -114,15 +154,8 @@
             </select> mm
           </label>
         </div>
-        <div style="flex:1;">
-          <div class="zRow">
-            <label>Z offset: <input id="zoff" type="number" step="1" value="0"/></label>
-            <button id="setZ">Set</button>
-          </div>
-          <div id="log"></div>
-        </div>
       </div>
-
+      <div id="log"></div>
     </section>
   </main>
 
@@ -164,6 +197,25 @@
       </div>
       <div class="modalFooter">
         <button id="filamentSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manual Filament Tracking Dialog -->
+  <div id="filamentDialog" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:white; padding:20px; border-radius:8px; max-width:400px; box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+      <h3 style="margin:0 0 12px 0;">Load Filament</h3>
+      <p style="margin:0 0 12px 0; font-size:13px;">Optional: Enter initial filament length for manual tracking (non-RFID filament)</p>
+      <div style="margin-bottom:12px;">
+        <label style="display:block; margin-bottom:4px; font-size:13px;">Initial Length (meters):</label>
+        <input type="number" id="filamentInitialLength" step="0.1" min="0" placeholder="e.g., 120" style="width:100%; padding:6px; font-size:14px;" />
+      </div>
+      <div style="display:flex; gap:8px; justify-content:space-between; margin-bottom:12px;">
+        <button id="filamentDialogCalc" style="padding:8px 12px; font-size:12px; background:#6c757d; color:white; border:none; border-radius:4px; cursor:pointer;">Calculate from Weight →</button>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button id="filamentDialogSkip" style="padding:8px 16px;">Skip (RFID)</button>
+        <button id="filamentDialogStart" style="padding:8px 16px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">Start Load</button>
       </div>
     </div>
   </div>

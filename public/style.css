@@ -1,36 +1,40 @@
 body { font-family: Arial, sans-serif; margin:0; padding:0; background:#f6f6f6; color:#222;}
-header { background:#2b6faa; color:white; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;}
+header { background:#2b6faa; color:white; padding:8px 12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;}
 header h1 { margin:0; font-size:18px;}
-main { display:grid; grid-template-columns: 200px 400px 1fr; gap:10px; padding:10px; max-height:calc(100vh - 50px); overflow:hidden;}
+#disconnectBtn { background:#e74c3c; color:white; border:none; font-weight:600;}
+#disconnectBtn:hover { background:#c0392b;}
+main { display:grid; grid-template-columns: 180px 350px 1fr; gap:10px; padding:10px; max-height:calc(100vh - 50px); overflow:hidden;}
 #tiles { display:flex; flex-direction:column; gap:8px;}
-.tile { background:white; padding:8px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);}
-.tile h2 { margin:0 0 6px 0; font-size:13px; color:#666;}
-.tile .big { font-size:20px; font-weight:600; margin:2px 0;}
-.tile .small { font-size:11px; color:#666; margin-top:2px;}
+.tile { background:white; padding:6px; border-radius:6px; box-shadow:0 1px 3px rgba(0,0,0,0.1);}
+.tile h2 { margin:0 0 4px 0; font-size:12px; color:#666;}
+.tile .big { font-size:18px; font-weight:600; margin:2px 0;}
+.tile .small { font-size:10px; color:#666; margin-top:2px;}
 #controls { background:white; padding:8px; border-radius:6px; overflow-y:auto; max-height:calc(100vh - 70px);}
-#controls h3 { margin:0 0 8px 0; font-size:15px;}
-#controls h4 { margin:12px 0 6px 0; font-size:13px; color:#555;}
-.btnRow { margin-bottom:6px; display:flex; flex-wrap:wrap; gap:4px;}
-button { padding:5px 8px; border-radius:4px; border:1px solid #ccc; background:#eee; cursor:pointer; font-size:11px;}
+#controls h3 { margin:0 0 6px 0; font-size:14px;}
+#controls h4 { margin:0 0 4px 0; font-size:12px; color:#555;}
+.controlGroup { margin-bottom:8px; padding:6px; background:#f9f9f9; border-radius:4px; border-left:3px solid #2b6faa;}
+.controlGroup h4 { margin:0 0 4px 0; font-size:12px; font-weight:600; color:#2b6faa;}
+.btnRow { margin-bottom:4px; display:flex; flex-wrap:wrap; gap:4px;}
+button { padding:4px 8px; border-radius:4px; border:1px solid #ccc; background:#eee; cursor:pointer; font-size:10px;}
 .progressWrapper { width:100%; height:14px; background:#eee; border-radius:7px; overflow:hidden; margin:4px 0;}
 #jobBar { width:0%; height:100%; background:linear-gradient(90deg,#2b6faa,#59a7e6); font-size:10px; line-height:14px; text-align:center; color:white;}
 #camera { background:white; padding:8px; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.15);}
-#camera h3 { margin:0 0 8px 0; font-size:15px;}
-#cameraBox { width:100%; height:280px; background:#111; display:flex; align-items:center; justify-content:center; border-radius:4px; overflow:hidden;}
+#camera h3 { margin:0 0 6px 0; font-size:14px;}
+#cameraBox { width:100%; height:220px; background:#111; display:flex; align-items:center; justify-content:center; border-radius:4px; overflow:hidden;}
 #cameraBox img { max-width:100%; max-height:100%; display:block; object-fit:contain;}
-#log { max-height:140px; overflow:auto; background:#fafafa; padding:6px; border-radius:4px; font-size:11px;}
+#log { max-height:100px; overflow:auto; background:#fafafa; padding:6px; border-radius:4px; font-size:10px; margin-top:8px;}
 #log div { padding:2px 0; border-bottom:1px solid #eee;}
-#uploads { background:white; padding:8px; border-radius:6px; margin-top:10px;}
-#uploads h3 { margin:0 0 8px 0; font-size:14px;}
-#uploads h4 { margin:8px 0 4px 0; font-size:12px;}
+#uploads { background:white; padding:6px; border-radius:6px; margin-top:8px;}
+#uploads h3 { margin:0 0 6px 0; font-size:13px;}
+#uploads h4 { margin:6px 0 4px 0; font-size:11px;}
 .uploadRow { display:flex; gap:8px; margin-bottom:8px;}
 #uploadFile { flex:1; font-size:11px; padding:4px;}
 #uploadStatus { font-size:11px; margin:4px 0;}
 #uploadsList { margin:0; padding-left:20px; font-size:11px; max-height:100px; overflow-y:auto;}
 .uploadProgress { height:14px; background:#eee; border-radius:7px; overflow:hidden;}
-.zRow { margin:8px 0; display:flex; gap:8px; align-items:center;}
-.zRow label { font-size:12px; display:flex; gap:4px; align-items:center;}
-.zRow input { width:60px; padding:4px; font-size:11px;}
+.zRow { margin:6px 0; display:flex; gap:6px; align-items:center;}
+.zRow label { font-size:11px; display:flex; gap:4px; align-items:center;}
+.zRow input { width:50px; padding:3px; font-size:10px;}
 
 .modal.hidden { display:none; }
 .modal { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:999; }
@@ -42,13 +46,7 @@ button { padding:5px 8px; border-radius:4px; border:1px solid #ccc; background:#
 .modalNote { margin-top:6px; font-weight:600; }
 .modalFooter { padding:12px 16px; border-top:1px solid #eee; text-align:right; }
 .modalClose { border:none; background:transparent; font-size:20px; cursor:pointer; }
-.jogGrid { display:grid; grid-template-columns:repeat(3, 60px); grid-template-rows:repeat(4, 50px); gap:8px; margin:12px 0; justify-content:center; }
-.jogBtn { padding:8px; font-size:14px; font-weight:600; cursor:pointer; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; }
+.jogGrid { display:grid; grid-template-columns:repeat(3, 50px); grid-template-rows:repeat(4, 40px); gap:6px; margin:6px 0; justify-content:center; }
+.jogBtn { padding:6px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; }
 .jogBtn:hover { background:#e9e9e9; }
 .jogBtn:active { background:#d9d9d9; }
-#controls h4 { margin:16px 0 8px 0; font-size:14px; color:#555; }
-.jogGrid { display:grid; grid-template-columns:repeat(3, 60px); grid-template-rows:repeat(4, 50px); gap:8px; margin:12px 0; justify-content:center; }
-.jogBtn { padding:8px; font-size:14px; font-weight:600; cursor:pointer; border:1px solid #ccc; background:#f9f9f9; border-radius:4px; }
-.jogBtn:hover { background:#e9e9e9; }
-.jogBtn:active { background:#d9d9d9; }
-#controls h4 { margin:16px 0 8px 0; font-size:14px; color:#555; }
