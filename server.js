@@ -10,6 +10,7 @@ const os = require('os');
 const Parser = require('./lib/parser');
 const { convert3mfToGcode } = require('./lib/convert_3mf');
 const { convert3wToGcode } = require('./lib/convert_3w');
+const { convertGcodeTo3w } = require('./lib/gcode_to_3w');
 
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const config = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE)) : {
@@ -91,6 +92,11 @@ const parser = new Parser();
 let port = null;
 let xyzUploader = null; // Will be initialized after port is ready
 
+// Reconnection state management for upload->print workflow
+// When upload completes, printer closes port to process file, then we reconnect to send start command
+let uploadReconnectPending = false; // Flag: expecting port close after upload
+let uploadReconnectFilename = null; // Track which file is being printed
+
 // store latest normalized status
 let latestStatus = parser._buildNormalizedStatus ? parser._buildNormalizedStatus() : { isValid: false };
 
@@ -156,8 +162,104 @@ try {
         resumePoll: () => { pollPaused = false; }
       }, parser);
     });
+    
     port.on('error', (e) => console.error('Serial error', e.message));
-    port.on('close', () => console.warn('Serial closed'));
+    
+    // Enhanced close handler with auto-reconnection for upload->print workflow
+    port.on('close', () => {
+      console.warn('Serial closed');
+      
+      // If we were expecting this closure after upload, reconnect and send start command
+      if (uploadReconnectPending) {
+        console.log('[RECONNECT] Upload completed, port closed as expected');
+        console.log('[RECONNECT] Waiting 500ms before reconnecting...');
+        io.emit('log', { msg: 'File uploaded, reconnecting to printer...' });
+        
+        setTimeout(() => {
+          try {
+            console.log('[RECONNECT] Reopening serial port...');
+            
+            port.open((err) => {
+              if (err) {
+                console.error('[RECONNECT] Failed to reopen port:', err.message);
+                uploadReconnectPending = false;
+                uploadReconnectFilename = null;
+                io.emit('log', { msg: 'Failed to reconnect - print may not start!' });
+                io.emit('upload_error', { error: 'Reconnection failed: ' + err.message });
+                return;
+              }
+              
+              console.log('[RECONNECT] Port reopened successfully');
+              io.emit('log', { msg: 'Reconnected! Confirming printer status...' });
+              
+              // Wait for port to stabilize, then query status to get fresh token
+              setTimeout(() => {
+                console.log('[RECONNECT] Sending status query (XYZv3/query=a) to get fresh token...');
+                
+                // Set up token listener with timeout
+                let tokenReceived = false;
+                let receivedToken = null;
+                
+                const tokenTimeout = setTimeout(() => {
+                  if (!tokenReceived) {
+                    console.warn('[RECONNECT] Token not received within 3s, sending start command without token');
+                    sendStartCommand(null);
+                  }
+                }, 3000);
+                
+                // Listen for token from status query response
+                parser.once('token', (token) => {
+                  tokenReceived = true;
+                  receivedToken = token;
+                  clearTimeout(tokenTimeout);
+                  console.log('[RECONNECT] Received fresh token:', token);
+                  sendStartCommand(token);
+                });
+                
+                // Send status query to get token
+                port.write('XYZv3/query=a\n', (writeErr) => {
+                  if (writeErr) {
+                    console.error('[RECONNECT] Failed to send status query:', writeErr.message);
+                    clearTimeout(tokenTimeout);
+                    sendStartCommand(null); // Fallback without token
+                  }
+                });
+                
+                // Helper function to send start command with or without token
+                function sendStartCommand(token) {
+                  const startCmd = token 
+                    ? JSON.stringify({ command: 6, state: 2, token: token })
+                    : JSON.stringify({ command: 6, state: 2 });
+                  
+                  console.log('[RECONNECT] Sending start command:', startCmd);
+                  io.emit('log', { msg: 'Sending print start command...' });
+                  
+                  port.write(startCmd + '\n', (writeErr) => {
+                    if (writeErr) {
+                      console.error('[RECONNECT] Failed to send start command:', writeErr.message);
+                      io.emit('log', { msg: 'Failed to send start command - print may not start!' });
+                    } else {
+                      console.log('[RECONNECT] Start command sent successfully - print should begin!');
+                      io.emit('log', { msg: `Print started: ${uploadReconnectFilename}` });
+                      io.emit('print_started', { filename: uploadReconnectFilename });
+                    }
+                    
+                    // Clear reconnection state
+                    uploadReconnectPending = false;
+                    uploadReconnectFilename = null;
+                  });
+                }
+              }, 500); // 500ms stabilization delay as per USB capture analysis
+            });
+          } catch (reconnectError) {
+            console.error('[RECONNECT] Error during reconnection:', reconnectError);
+            uploadReconnectPending = false;
+            uploadReconnectFilename = null;
+            io.emit('log', { msg: 'Reconnection error: ' + reconnectError.message });
+          }
+        }, 500); // 500ms delay before reconnect attempt (as recommended by "Badfish" analysis)
+      }
+    });
     
     // Debug: listen to raw port data (disabled - too verbose)
     // let dataCount = 0;
@@ -448,11 +550,58 @@ app.post('/print', async (req, res) => {
     });
   }
   
-  // Start upload which will automatically start printing
-  // Don't await - let it run in background
-  xyzUploader.uploadFile(filePath, filename).catch(err => {
+  // XYZ printers require .3w format - convert gcode to .3w if needed
+  let fileToUpload = filePath;
+  let uploadFilename = filename;
+  
+  if (filename.toLowerCase().endsWith('.gcode') || filename.toLowerCase().endsWith('.txt')) {
+    console.log('[PRINT] Converting gcode to .3w format (required by XYZ firmware)...');
+    const w3Filename = filename.replace(/\.(gcode|txt)$/i, '.3w');
+    const w3Path = path.join(uploadsDir, w3Filename);
+    
+    try {
+      const result = await convertGcodeTo3w(filePath, w3Path);
+      if (!result.success) {
+        throw new Error(result.error || 'Conversion failed');
+      }
+      
+      console.log('[PRINT] Gcode converted to .3w successfully:', w3Filename);
+      fileToUpload = w3Path;
+      uploadFilename = w3Filename;
+      
+      // Notify UI about conversion
+      io.emit('log', { msg: `Converted ${filename} to .3w format` });
+      
+    } catch (convError) {
+      console.error('[PRINT] Failed to convert gcode to .3w:', convError.message);
+      return res.status(500).json({
+        ok: false,
+        error: `Cannot print: XYZ firmware requires .3w format. Conversion failed: ${convError.message}`
+      });
+    }
+  } else if (!filename.toLowerCase().endsWith('.3w')) {
+    // Not gcode, not .3w - unsupported format
+    return res.status(400).json({
+      ok: false,
+      error: `Unsupported file format. XYZ firmware requires .3w files. Please upload gcode (will be auto-converted) or .3w files.`
+    });
+  }
+  
+  // Set reconnection flag BEFORE starting upload
+  // After upload completes, printer will close port, then we auto-reconnect and send start command
+  uploadReconnectPending = true;
+  uploadReconnectFilename = uploadFilename;
+  console.log('[PRINT] Reconnection workflow enabled for:', uploadFilename);
+  console.log('[PRINT] Uploading file:', fileToUpload);
+  
+  // Start upload (will trigger: upload → taginfo → port close → reconnect → start command)
+  // Don't await - let it run in background, reconnection handler will take over
+  xyzUploader.uploadFile(fileToUpload, uploadFilename).catch(err => {
     console.error('[PRINT] Upload/print error:', err.message);
     io.emit('upload_error', { error: err.message });
+    // Clear reconnection flag on error
+    uploadReconnectPending = false;
+    uploadReconnectFilename = null;
   });
   
   res.json({ ok: true, started: true });
