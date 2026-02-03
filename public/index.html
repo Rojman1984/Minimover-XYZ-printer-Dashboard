@@ -13,6 +13,7 @@
     <div style="display:flex; gap:12px; align-items:center;">
       <div id="connection">Connecting...</div>
       <button id="disconnectBtn" style="padding:4px 12px; font-size:12px;">Disconnect</button>
+      <button id="helpBtn" style="padding:4px 12px; font-size:12px; background:white; color:#2b6faa; border:1px solid #2b6faa; font-weight:bold;" title="Troubleshooting Help">?</button>
     </div>
   </header>
 
@@ -44,7 +45,15 @@
 
     <div>
       <section id="camera">
-        <h3>Print Monitor</h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 style="margin:0;">Camera View</h3>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <select id="cameraSelect" style="padding:4px 8px; font-size:12px;">
+              <!-- Populated dynamically -->
+            </select>
+            <button id="reconnectCamera" style="padding:4px 8px; font-size:11px;" title="Restart camera service">⟳</button>
+          </div>
+        </div>
         <div id="cameraBox">
           <img id="camStream" alt="camera stream" />
         </div>
@@ -64,7 +73,7 @@
           Accepts: .gcode or .3w (deprecated XYZ format).<br>
           Mesh files (.STL, .3MF, .OBJ, etc.) must be sliced to gcode first.
         </div>
-        <h4>Stored uploads</h4>
+        <h4>Saved files</h4>
         <ul id="uploadsList"></ul>
       </section>
     </div>
@@ -155,7 +164,8 @@
           </label>
         </div>
       </div>
-      <div id="log"></div>
+      <!-- Debug log hidden by default -->
+      <div id="log" style="display:none;"></div>
     </section>
   </main>
 
@@ -216,6 +226,89 @@
       <div style="display:flex; gap:8px; justify-content:flex-end;">
         <button id="filamentDialogSkip" style="padding:8px 16px;">Skip (RFID)</button>
         <button id="filamentDialogStart" style="padding:8px 16px; background:#007bff; color:white; border:none; border-radius:4px; cursor:pointer;">Start Load</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help Modal -->
+  <div id="helpModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:700px; max-height:80vh; overflow-y:auto; background:white; border-radius:8px; padding:20px; position:relative;">
+      <span class="close" id="helpClose" style="position:absolute; top:10px; right:15px; font-size:28px; font-weight:bold; cursor:pointer; color:#666;">&times;</span>
+      <h2 style="margin-top:0;">Troubleshooting Guide</h2>
+      
+      <h3>Printer Not Responding</h3>
+      <ol>
+        <li><strong>Check Connection:</strong> Verify USB cable is connected</li>
+        <li><strong>Power Cycle Printer:</strong> Turn printer off, wait 10 seconds, turn back on</li>
+        <li><strong>Restart Dashboard:</strong>
+          <pre style="background:#e8e8e8; padding:8px; border-radius:4px; overflow-x:auto; color:#000;">cd ~/Minimover-XYZ-printer-Dashboard
+sudo pkill -f "node.*server.js"
+npm start</pre>
+        </li>
+        <li><strong>Check Serial Port:</strong>
+          <pre style="background:#e8e8e8; padding:8px; border-radius:4px; overflow-x:auto; color:#000;">ls -la /dev/ttyACM* /dev/ttyUSB*</pre>
+        </li>
+      </ol>
+
+      <h3>Camera Not Working</h3>
+      <ol>
+        <li><strong>Use Reconnect Button:</strong> Click the ⟳ button next to camera dropdown</li>
+        <li><strong>Check Camera Device:</strong>
+          <pre style="background:#e8e8e8; padding:8px; border-radius:4px; overflow-x:auto; color:#000;">ls -la /dev/videousb*</pre>
+        </li>
+        <li><strong>Restart Camera Service:</strong>
+          <pre style="background:#e8e8e8; padding:8px; border-radius:4px; overflow-x:auto; color:#000;">sudo systemctl restart mjpg-streamer
+sudo systemctl status mjpg-streamer</pre>
+        </li>
+        <li><strong>Check Camera Connection:</strong> Replug USB camera, wait 5 seconds</li>
+      </ol>
+
+      <h3>Upload/Print Failures</h3>
+      <ol>
+        <li><strong>File Format:</strong> Ensure file is .gcode or .3w format</li>
+        <li><strong>Printer Ready:</strong> Wait for "Connected" status before uploading</li>
+        <li><strong>Clear Jam:</strong> If printer frozen, power cycle and restart dashboard</li>
+      </ol>
+
+      <h3>View System Logs</h3>
+      <pre style="background:#e8e8e8; padding:8px; border-radius:4px; overflow-x:auto; color:#000;"># Dashboard logs (if running as service)
+sudo journalctl -u minimover-dashboard -n 50
+
+# Camera service logs
+sudo journalctl -u mjpg-streamer -n 30
+
+# System messages
+sudo dmesg | tail -30</pre>
+
+      <h3>Emergency Reset</h3>
+      <p>If dashboard becomes completely unresponsive:</p>
+      <pre style="background:#e8e8e8; padding:8px; border-radius:4px; overflow-x:auto; color:#000;"># Kill all node processes
+sudo pkill node
+
+# Restart services
+sudo systemctl restart mjpg-streamer
+
+# Start dashboard again
+cd ~/Minimover-XYZ-printer-Dashboard
+npm start</pre>
+    </div>
+  </div>
+
+  <!-- .3w Conversion Modal -->
+  <div id="convert3wModal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:500px; background:white; border-radius:8px; padding:20px; position:relative;">
+      <h2 style="margin-top:0; color:#2b6faa;">Convert .3w File?</h2>
+      <p style="font-size:14px; line-height:1.6;">
+        You've selected a <strong>.3w file</strong> (XYZprinting encrypted format).
+      </p>
+      <p style="font-size:14px; line-height:1.6; background:#e8f4f8; padding:10px; border-radius:4px; border-left:3px solid #2b6faa;">
+        <strong>Note:</strong> XYZprinting printers can handle .3w files natively without conversion.
+        The printer will decrypt the file automatically.
+      </p>
+      <p style="font-size:13px; margin-top:10px;">Would you like to convert it to gcode before uploading?</p>
+      <div style="margin-top:20px; display:flex; gap:10px; justify-content:flex-end;">
+        <button id="convert3wNo" style="padding:10px 20px; font-size:14px; background:#28a745; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">No - Upload .3w Directly</button>
+        <button id="convert3wYes" style="padding:10px 20px; font-size:14px; background:#6c757d; color:white; border:none; border-radius:4px; cursor:pointer;">Yes - Convert to Gcode</button>
       </div>
     </div>
   </div>

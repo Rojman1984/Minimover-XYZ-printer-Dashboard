@@ -291,6 +291,75 @@ Completed dashboard polish, fixed camera streaming, implemented .3w decryption f
 
 ## Session History
 
+### Session 2026-02-02 - Binary .3w Upload Protocol Investigation
+**Problem Encountered:**
+- Print upload failing: "blinking perpetually and then fails"
+- .3w files upload via web UI but don't trigger print on printer
+- Status LED indicates data received but print doesn't start
+
+**Investigation Performed:**
+- Analyzed 25MB USB capture (TextStream_3Dprinter_.3wfile.txt, 176,157 lines)
+- Discovered .3w upload uses **binary-only protocol** (no text commands)
+- Block structure: 4 bytes index + 4 bytes size + 8192 data + 4 bytes trailer (XOR 0x5A5AA5A5)
+- USB capture shows blocks sent continuously at ~1 second intervals
+- Each block followed by printer "ok\n" response (0x6f 0x6b 0x0a)
+- **No XYZv3/upload or XYZv3/uploadDidFinish commands in capture**
+
+**Code Changes Made:**
+1. Created `lib/upload_xyz_v3.js` - Binary block upload handler
+   - Streams 8KB blocks with proper header/trailer format
+   - 5ms delay between blocks (reduced from 50ms)
+   - Removed waitForOk() - printer doesn't wait for acknowledgments
+   - Pauses status polling during upload
+
+2. Modified `server.js`:
+   - Added XYZv3Uploader initialization with parser reference
+   - Print endpoint calls uploadFile() for binary transfer
+   - Added parser to uploader for token handling
+
+3. Multiple protocol attempts:
+   - Attempt 1: Text init `XYZv3/upload=filename,size` + blocks + `XYZv3/uploadDidFinish` ❌
+   - Attempt 2: JSON command `{"command":5,"name":"file","size":123,"token":""}` ❌ (printer didn't respond with token)
+   - Attempt 3: Binary blocks only (no init) ✅ (blocks transfer, LED blinks)
+
+**Current State:**
+- ✅ Binary blocks upload successfully (100% completion)
+- ✅ Printer receives all data (confirmed by server logs)
+- ❌ **CRITICAL ISSUE**: Print doesn't start after upload completes
+- ⚠️ Serial port closes after 100% upload ("bad file descriptor" errors)
+- ⚠️ Printer LED behavior varies: blinking (receiving), solid red (error), or closes connection
+
+**Technical Findings:**
+- Upload completion log shows: "100% (308112/308112 bytes, block 38)"
+- Immediately after: "Serial error bad file descriptor" + "Serial closed"
+- Printer may close serial to process file, then reopen when ready
+- Missing final trigger command or sequence to start actual print job
+
+**Files Modified:**
+- `lib/upload_xyz_v3.js` (CREATED) - Binary upload implementation
+- `server.js` - Added uploader initialization and print endpoint handler
+
+**Known Issues:**
+1. **Upload completes but print doesn't start** - Missing finalization/trigger
+2. Printer closes serial connection after upload
+3. No clear command sequence in USB capture for "start print"
+4. Tried multiple init protocols - all rejected or ignored by printer
+
+**Next Steps (for tomorrow):**
+1. Analyze USB capture AFTER last data block to find actual print trigger
+2. Search for packets following block 46 (last block) around line 25000-30000
+3. May need to send separate command post-upload to trigger print
+4. Consider if printer state/mode needs to be different before upload
+5. Investigate if serial reconnection is expected behavior
+
+**References:**
+- USB Capture: `/home/maker2/Minimover-XYZ-printer-Dashboard/SampleUSBDataStream/`
+  - `TextStream_3Dprinter_.3wfile.txt` (25MB, 176,157 lines)
+  - `Raw_print_stream_.3wfile.raw` (1MB binary, different session)
+- Based on miniMover protocol analysis
+
+---
+
 ### Session 2026-02-01 - Dashboard UI Polish & .3w Decryption
 **Changes Made:**
 - Fixed dashboard layout for 1024x720 resolution, removed duplicate sections

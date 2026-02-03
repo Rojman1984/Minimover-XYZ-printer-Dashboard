@@ -7,6 +7,9 @@ console.log('Socket.IO instance created:', socket);
 const connEl = document.getElementById('connection');
 const printerModelEl = document.getElementById('printerModel');
 const disconnectBtn = document.getElementById('disconnectBtn');
+const helpBtn = document.getElementById('helpBtn');
+const helpModal = document.getElementById('helpModal');
+const helpClose = document.getElementById('helpClose');
 const extruderTemp = document.getElementById('extruderTemp');
 const extruderTarget = document.getElementById('extruderTarget');
 const filamentLen = document.getElementById('filamentLen');
@@ -23,6 +26,10 @@ let isUnloadingFilament = false;
 let isCalibrating = false;
 let printerModel = null;
 let isNanoModel = false; // Track if it's a Nano (no manual calibration needed)
+
+// Cache last values to avoid unnecessary DOM updates
+let lastModelSerial = '';
+let lastFilamentName = '';
 
 // Manual filament tracking (for non-RFID filaments)
 let manualFilament = {
@@ -148,15 +155,20 @@ socket.on('error', (error) => {
 socket.on('status', (st) => {
   if (!st) return;
   
-  // Update printer model/SN display - only update if we have actual data
+  // Update printer model/SN display - only update DOM if changed
+  let modelSerial = '';
   if (st.model && st.serialNumber) {
-    printerModelEl.textContent = `${st.model} | SN: ${st.serialNumber}`;
+    modelSerial = `${st.model} | SN: ${st.serialNumber}`;
     printerModel = st.model;
   } else if (st.model) {
-    printerModelEl.textContent = st.model;
+    modelSerial = st.model;
     printerModel = st.model;
   }
-  // Don't overwrite with generic text if we haven't received model data yet
+  
+  if (modelSerial && modelSerial !== lastModelSerial) {
+    printerModelEl.textContent = modelSerial;
+    lastModelSerial = modelSerial;
+  }
   
   // Detect if it's a Nano model (automatic calibration only)
   if (printerModel && printerModel.toLowerCase().includes('nano')) {
@@ -236,14 +248,21 @@ socket.on('status', (st) => {
   }
   
   // Show filament info if we have it, regardless of flags (factory spools always have serial)
+  let filamentNameText = '';
   if (st.filamentSerial && st.filamentSerial.length > 0) {
-    filamentName.textContent = st.filamentSerial;
+    filamentNameText = st.filamentSerial;
   } else if (st.filamentInfo && st.filamentInfo.length > 0 && st.filamentInfo[0]) {
-    filamentName.textContent = st.filamentInfo[0];
+    filamentNameText = st.filamentInfo[0];
   } else if (hasFilament) {
-    filamentName.textContent = 'Filament loaded';
+    filamentNameText = 'Filament loaded';
   } else {
-    filamentName.textContent = 'No filament loaded';
+    filamentNameText = 'No filament loaded';
+  }
+  
+  // Only update DOM if changed
+  if (filamentNameText !== lastFilamentName) {
+    filamentName.textContent = filamentNameText;
+    lastFilamentName = filamentNameText;
   }
 
   updateFilamentEstimateUI();
@@ -504,6 +523,23 @@ disconnectBtn.onclick = () => {
   }
 };
 
+// Help button
+if (helpBtn && helpModal && helpClose) {
+  helpBtn.onclick = () => {
+    helpModal.style.display = 'flex';
+  };
+
+  helpClose.onclick = () => {
+    helpModal.style.display = 'none';
+  };
+
+  window.addEventListener('click', (e) => {
+    if (e.target === helpModal) {
+      helpModal.style.display = 'none';
+    }
+  });
+}
+
 document.getElementById('setZ').onclick = () => {
   const off = parseInt(document.getElementById('zoff').value || '0', 10);
   socket.emit('command', { action: 'set_zoffset', offset: off });
@@ -561,6 +597,7 @@ async function refreshUploads() {
         const printBtn = document.createElement('button');
         printBtn.textContent = 'Print';
         printBtn.onclick = async () => {
+          if (!confirm(`Send ${f} to printer and start printing?`)) return;
           printBtn.disabled = true;
           const res = await fetch('/print', {
             method: 'POST',
@@ -569,7 +606,7 @@ async function refreshUploads() {
           });
           const jr = await res.json();
           if (!jr.ok) uploadStatus.textContent = `Print error: ${jr.error || 'unknown'}`;
-          else uploadStatus.textContent = `Print started for ${f}`;
+          else uploadStatus.textContent = `Sending ${f} to printer...`;
           printBtn.disabled = false;
         };
         li.appendChild(printBtn);
@@ -608,10 +645,40 @@ async function refreshUploads() {
 // XHR upload to support progress events
 uploadBtn.onclick = () => {
   const files = uploadFileEl.files;
+  
   if (!files || !files.length) { uploadStatus.textContent = 'No file selected'; return; }
   const file = files[0];
+  
+  // Check if it's a .3w file and ask user about conversion
+  if (file.name.toLowerCase().endsWith('.3w')) {
+    const modal = document.getElementById('convert3wModal');
+    const yesBtn = document.getElementById('convert3wYes');
+    const noBtn = document.getElementById('convert3wNo');
+    
+    // Show the modal
+    modal.style.display = 'flex';
+    
+    // Handle user choice
+    const handleChoice = (convert) => {
+      modal.style.display = 'none';
+      yesBtn.onclick = null;
+      noBtn.onclick = null;
+      performUpload(file, convert);
+    };
+    
+    yesBtn.onclick = () => handleChoice(true);
+    noBtn.onclick = () => handleChoice(false);
+    return;
+  }
+  
+  // Regular gcode file - upload directly
+  performUpload(file, false);
+};
+
+function performUpload(file, convertToGcode) {
   const fd = new FormData();
   fd.append('file', file, file.name);
+  fd.append('convert3w', convertToGcode ? 'true' : 'false');
 
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/upload', true);
@@ -647,12 +714,12 @@ uploadBtn.onclick = () => {
 
   xhr.onerror = () => { uploadStatus.textContent = 'Upload network error'; };
   xhr.send(fd);
-  setUploadProgress(0, 'Starting upload...');
+  setUploadProgress(0, 'Uploading to Pi...');
 };
 
 // socket events for upload progress
 socket.on('upload_started', (info) => {
-  uploadStatus.textContent = `Upload started: ${info.filename || ''}`;
+  uploadStatus.textContent = `Sending to printer: ${info.filename || ''}`;
   setUploadProgress(0);
 });
 socket.on('upload_progress', (p) => {
@@ -664,12 +731,12 @@ socket.on('upload_progress', (p) => {
   }
 });
 socket.on('upload_finished', (r) => {
-  uploadStatus.textContent = `Upload finished. Token: ${r.token || ''}`;
+  uploadStatus.textContent = `Sent to printer. Ready to print.`;
   setUploadProgress(100);
   refreshUploads();
 });
 socket.on('upload_error', (e) => {
-  uploadStatus.textContent = `Upload error: ${e && e.error ? e.error : e}`;
+  uploadStatus.textContent = `Send error: ${e && e.error ? e.error : e}`;
 });
 
 filamentMaterial.addEventListener('change', () => {
@@ -690,27 +757,51 @@ window.addEventListener('load', async () => {
   
   // Camera stream handling with Edge browser compatibility
   const camStream = document.getElementById('camStream');
+  const cameraSelect = document.getElementById('cameraSelect');
   
-  // Get camera URL and FPS from server (handles localhost vs IP address issue)
-  let baseUrl;
+  // Get camera URLs and FPS from server
+  let cameras = [];
   let cameraFps = 15; // Default to 15fps
   try {
     const response = await fetch('/api/camera-url');
     const data = await response.json();
-    baseUrl = data.cameraUrl;
+    cameras = data.cameras || [];
     cameraFps = data.fps || 15;
-    console.log('Using camera URL:', baseUrl, 'at', cameraFps, 'fps');
+    console.log('Cameras:', cameras, 'at', cameraFps, 'fps');
+    
+    // Populate dropdown
+    cameras.forEach((cam, index) => {
+      const option = document.createElement('option');
+      option.value = cam.id;
+      option.textContent = cam.device;
+      cameraSelect.appendChild(option);
+    });
   } catch (err) {
     // Fallback to using window location
-    baseUrl = `http://${window.location.hostname}:8080`;
-    console.log('Failed to get camera URL from server, using fallback:', baseUrl);
+    const hostname = window.location.hostname;
+    cameras = [
+      { id: 'cam0', device: '/dev/video-printer', url: `http://${hostname}:8080` },
+      { id: 'cam1', device: '/dev/video-laser', url: `http://${hostname}:8081` }
+    ];
+    console.log('Failed to get cameras from server, using fallback:', cameras);
+    
+    // Populate dropdown with fallback
+    cameras.forEach((cam) => {
+      const option = document.createElement('option');
+      option.value = cam.id;
+      option.textContent = cam.device;
+      cameraSelect.appendChild(option);
+    });
   }
   
   const snapshotInterval = Math.round(1000 / cameraFps); // Convert FPS to milliseconds
   let snapshotTimer = null;
   
-  function startSnapshotMode() {
+  function startSnapshotMode(baseUrl) {
     console.log(`Using snapshot mode for camera at ${cameraFps}fps (${snapshotInterval}ms interval)`);
+    
+    // Clear existing timer if any
+    if (snapshotTimer) clearInterval(snapshotTimer);
     
     // Refresh snapshot at configured FPS
     snapshotTimer = setInterval(() => {
@@ -718,31 +809,86 @@ window.addEventListener('load', async () => {
     }, snapshotInterval);
   }
   
-  // Detect if browser is Edge or doesn't support MJPEG well
-  const isEdge = /Edg/.test(navigator.userAgent);
-  
-  if (isEdge) {
-    // Edge doesn't handle MJPEG streams well, use snapshot mode
-    console.log('Edge browser detected, using snapshot mode');
-    startSnapshotMode();
-  } else {
-    // Try MJPEG stream for Chrome/Firefox
-    const streamUrl = `${baseUrl}/?action=stream`;
-    console.log('Attempting MJPEG stream from:', streamUrl);
+  function loadCamera(cameraId) {
+    const camera = cameras.find(cam => cam.id === cameraId);
+    if (!camera) {
+      console.error('Camera not found:', cameraId);
+      return;
+    }
     
-    camStream.onerror = () => {
-      console.log('MJPEG stream failed, switching to snapshot mode');
-      startSnapshotMode();
-    };
+    const baseUrl = camera.url;
+    console.log('Switching to camera:', camera.device, baseUrl);
     
-    camStream.src = streamUrl;
+    // Clear any existing snapshot timer
+    if (snapshotTimer) {
+      clearInterval(snapshotTimer);
+      snapshotTimer = null;
+    }
     
-    // Fallback: if stream doesn't load within 3 seconds, use snapshots
-    setTimeout(() => {
-      if (!camStream.complete || camStream.naturalHeight === 0) {
-        console.log('MJPEG stream timeout, switching to snapshot mode');
-        startSnapshotMode();
-      }
-    }, 3000);
+    // Detect if browser is Edge or doesn't support MJPEG well
+    const isEdge = /Edg/.test(navigator.userAgent);
+    
+    if (isEdge) {
+      // Edge doesn't handle MJPEG streams well, use snapshot mode
+      console.log('Edge browser detected, using snapshot mode');
+      startSnapshotMode(baseUrl);
+    } else {
+      // Try MJPEG stream for Chrome/Firefox
+      const streamUrl = `${baseUrl}/?action=stream`;
+      console.log('Attempting MJPEG stream from:', streamUrl);
+      
+      camStream.onerror = () => {
+        console.log('MJPEG stream failed, switching to snapshot mode');
+        startSnapshotMode(baseUrl);
+      };
+      
+      camStream.src = streamUrl;
+      
+      // Fallback: if stream doesn't load within 3 seconds, use snapshots
+      setTimeout(() => {
+        if (!camStream.complete || camStream.naturalHeight === 0) {
+          console.log('MJPEG stream timeout, switching to snapshot mode');
+          startSnapshotMode(baseUrl);
+        }
+      }, 3000);
+    }
   }
+  
+  // Camera selector change event
+  cameraSelect.addEventListener('change', (e) => {
+    loadCamera(e.target.value);
+  });
+  
+  // Load first camera by default
+  if (cameras.length > 0) {
+    loadCamera(cameras[0].id);
+  }
+  
+  // Reconnect camera button
+  const reconnectBtn = document.getElementById('reconnectCamera');
+  reconnectBtn.addEventListener('click', async () => {
+    reconnectBtn.disabled = true;
+    reconnectBtn.textContent = '...';
+    try {
+      const response = await fetch('/api/reconnect-camera', { method: 'POST' });
+      const data = await response.json();
+      if (data.success) {
+        // Reload camera after short delay
+        setTimeout(() => {
+          if (cameras.length > 0) loadCamera(cameras[0].id);
+          reconnectBtn.textContent = '⟳';
+          reconnectBtn.disabled = false;
+        }, 2000);
+      } else {
+        alert('Failed to restart camera');
+        reconnectBtn.textContent = '⟳';
+        reconnectBtn.disabled = false;
+      }
+    } catch (err) {
+      console.error('Error reconnecting camera:', err);
+      alert('Error reconnecting camera');
+      reconnectBtn.textContent = '⟳';
+      reconnectBtn.disabled = false;
+    }
+  });
 });

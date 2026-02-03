@@ -15,7 +15,7 @@ const CONFIG_FILE = path.join(__dirname, 'config.json');
 const config = fs.existsSync(CONFIG_FILE) ? JSON.parse(fs.readFileSync(CONFIG_FILE)) : {
   serialPath: '/dev/ttyUSB0',
   baudRate: 115200,
-  pollIntervalMs: 500,
+  pollIntervalMs: 2000,
   enableWebcam: true,
   webcamIntervalMs: 500,
   webcamDevice: '/dev/video0',
@@ -36,6 +36,7 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 const { startUpload } = require('./lib/upload_serial');
 const SerialBridge = require('./lib/serial_bridge');
 const UploadV3 = require('./lib/upload_v3');
+const XYZv3Uploader = require('./lib/upload_xyz_v3');
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -57,9 +58,30 @@ app.get('/api/camera-url', (req, res) => {
     if (serverIp) break;
   }
   
-  const cameraUrl = serverIp ? `http://${serverIp}:8080` : `http://${req.hostname}:8080`;
+  const baseIp = serverIp || req.hostname;
   const fps = Math.min(Math.max(config.cameraFps || 15, 1), 30); // Clamp between 1-30fps
-  res.json({ cameraUrl, fps });
+  
+  // Only include printer camera - laser camera reserved for LightBurn
+  res.json({ 
+    cameras: [
+      { id: 'cam0', device: '/dev/videousb0', url: `http://${baseIp}:8080` }
+    ],
+    fps 
+  });
+});
+
+// Reconnect camera endpoint
+app.post('/api/reconnect-camera', (req, res) => {
+  const { spawn } = require('child_process');
+  const restart = spawn('sudo', ['systemctl', 'restart', 'mjpg-streamer']);
+  
+  restart.on('close', (code) => {
+    if (code === 0) {
+      res.json({ success: true, message: 'Camera service restarted' });
+    } else {
+      res.status(500).json({ success: false, message: 'Failed to restart camera service' });
+    }
+  });
 });
 
 // instantiate parser
@@ -67,6 +89,7 @@ const parser = new Parser();
 
 // Initialize port variable (will be set if serialport loads successfully)
 let port = null;
+let xyzUploader = null; // Will be initialized after port is ready
 
 // store latest normalized status
 let latestStatus = parser._buildNormalizedStatus ? parser._buildNormalizedStatus() : { isValid: false };
@@ -125,11 +148,29 @@ try {
     port = new SerialPort({ path: serialPath, baudRate: config.baudRate, autoOpen: false });
     const parserSerial = port.pipe(new ReadlineParser({ delimiter: '\n' }));
 
-    port.on('open', () => console.log('Serial opened', serialPath));
+    port.on('open', () => {
+      console.log('Serial opened', serialPath);
+      // Initialize uploader after port is open
+      xyzUploader = new XYZv3Uploader(port, io, {
+        pausePoll: () => { pollPaused = true; },
+        resumePoll: () => { pollPaused = false; }
+      }, parser);
+    });
     port.on('error', (e) => console.error('Serial error', e.message));
     port.on('close', () => console.warn('Serial closed'));
+    
+    // Debug: listen to raw port data (disabled - too verbose)
+    // let dataCount = 0;
+    // port.on('data', (data) => {
+    //   dataCount++;
+    //   if (dataCount % 10 === 0) {
+    //     console.log('[RAW PORT DATA] Received', dataCount, 'chunks, last:', data.toString().substring(0, 50));
+    //   }
+    // });
 
     parserSerial.on('data', (line) => {
+      // Only log non-static data (disabled to reduce console spam)
+      // console.log('[PARSER DATA]', line);
       parser.feed(line);
     });
 
@@ -158,12 +199,28 @@ function sendRaw(msg) {
 
 // polling loop
 let lastPoll = 0;
+let pollPaused = false; // Pause polling during upload
+let pollDebugCounter = 0;
+let initialPollDone = false;
+
 setInterval(() => {
-  if (!port || !port.isOpen) return;
+  if (!port || !port.isOpen || pollPaused) return;
   const now = Date.now();
   if (now - lastPoll < config.pollIntervalMs) return;
   lastPoll = now;
-  sendRaw('XYZv3/query=a');
+  
+  // Send initial full query on first poll to get model/serial
+  if (!initialPollDone) {
+    sendRaw('XYZv3/query=wf'); // Full status query
+    initialPollDone = true;
+    console.log('[POLL] Initial full status query sent');
+  } else {
+    sendRaw('XYZv3/query=a'); // Temperature/status query
+  }
+  
+  if (++pollDebugCounter % 20 === 0) {
+    console.log('[POLL] Status query sent (count:', pollDebugCounter, ')');
+  }
 }, 100);
 
 // Socket.io endpoints (UI -> server)
@@ -288,9 +345,11 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
   }
   
-  // Check if it's a .3w file that needs decryption
-  if (req.file.filename.toLowerCase().endsWith('.3w')) {
-    console.log('[UPLOAD] Converting .3w file:', req.file.filename);
+  // Check if it's a .3w file and whether to convert it
+  const shouldConvert = req.body.convert3w === 'true';
+  
+  if (req.file.filename.toLowerCase().endsWith('.3w') && shouldConvert) {
+    console.log('[UPLOAD] Converting .3w file to gcode:', req.file.filename);
     try {
       const gcodeFilename = req.file.filename.replace(/\.3w$/i, '.gcode');
       const gcodePath = path.join(uploadsDir, gcodeFilename);
@@ -322,6 +381,19 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         error: `Failed to decrypt .3w file: ${error.message}` 
       });
     }
+  }
+  
+  // .3w file uploaded directly (not converted) - printer will decrypt natively
+  if (req.file.filename.toLowerCase().endsWith('.3w')) {
+    console.log('[UPLOAD] .3w file uploaded directly (encrypted):', req.file.filename);
+    return res.json({
+      ok: true,
+      filename: req.file.filename,
+      size: req.file.size,
+      converted: false,
+      format: '3w (encrypted)',
+      message: '.3w file will be sent encrypted - printer decrypts natively'
+    });
   }
   
   // Regular gcode file
@@ -360,31 +432,30 @@ app.delete('/uploads/:filename', (req, res) => {
   }
 });
 
-app.post('/print', (req, res) => {
+app.post('/print', async (req, res) => {
   const filename = req.body && req.body.filename;
   if (!filename) return res.status(400).json({ ok: false, error: 'missing filename' });
   const filePath = path.join(uploadsDir, filename);
   if (!fs.existsSync(filePath)) return res.status(404).json({ ok: false, error: 'file not found' });
-  if (!port || !port.isOpen) return res.status(500).json({ ok: false, error: 'serial not open' });
-  const serialBridge = new SerialBridge(config);
-  const uploadV3 = new UploadV3(serialBridge);
-  const ee = startUpload(filePath, port, parser);
-
-  ee.on('started', (info) => {
-    io.emit('upload_started', { filename: info.fileName, total: info.total });
+  
+  console.log('[PRINT] Starting print job:', filename);
+  
+  // Check if uploader is ready
+  if (!xyzUploader) {
+    return res.status(503).json({ 
+      ok: false, 
+      error: 'Serial port not ready. Please wait for connection to establish.' 
+    });
+  }
+  
+  // Start upload which will automatically start printing
+  // Don't await - let it run in background
+  xyzUploader.uploadFile(filePath, filename).catch(err => {
+    console.error('[PRINT] Upload/print error:', err.message);
+    io.emit('upload_error', { error: err.message });
   });
-  ee.on('progress', (p) => {
-    io.emit('upload_progress', p);
-  });
-  ee.on('finished', (r) => {
-    latestStatus.token = r.token;
-    io.emit('upload_finished', r);
-  });
-  ee.on('error', (e) => {
-    io.emit('upload_error', { error: String(e) });
-  });
-
-  return res.json({ ok: true, started: true });
+  
+  res.json({ ok: true, started: true });
 });
 
 const portHttp = config.port || 3000;
