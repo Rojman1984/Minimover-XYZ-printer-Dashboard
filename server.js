@@ -175,6 +175,9 @@ try {
         console.log('[RECONNECT] Waiting 500ms before reconnecting...');
         io.emit('log', { msg: 'File uploaded, reconnecting to printer...' });
         
+        // Keep polling PAUSED during reconnection workflow
+        pollPaused = true;
+        
         setTimeout(() => {
           try {
             console.log('[RECONNECT] Reopening serial port...');
@@ -196,32 +199,41 @@ try {
               setTimeout(() => {
                 console.log('[RECONNECT] Sending status query (XYZv3/query=a) to get fresh token...');
                 
-                // Set up token listener with timeout
+                // Set up token listener with longer timeout (10 seconds)
                 let tokenReceived = false;
                 let receivedToken = null;
                 
                 const tokenTimeout = setTimeout(() => {
                   if (!tokenReceived) {
-                    console.warn('[RECONNECT] Token not received within 3s, sending start command without token');
+                    console.warn('[RECONNECT] Token not received within 10s, sending start command without token');
                     sendStartCommand(null);
                   }
-                }, 3000);
+                }, 10000); // Increased from 3s to 10s
                 
                 // Listen for token from status query response
                 parser.once('token', (token) => {
                   tokenReceived = true;
                   receivedToken = token;
                   clearTimeout(tokenTimeout);
-                  console.log('[RECONNECT] Received fresh token:', token);
+                  console.log('[RECONNECT] ✓ Received fresh token:', token);
                   sendStartCommand(token);
                 });
+                
+                // Also listen for raw data to debug
+                const debugDataHandler = (data) => {
+                  console.log('[RECONNECT DEBUG] Received data:', data.toString().substring(0, 100));
+                };
+                port.once('data', debugDataHandler);
                 
                 // Send status query to get token
                 port.write('XYZv3/query=a\n', (writeErr) => {
                   if (writeErr) {
                     console.error('[RECONNECT] Failed to send status query:', writeErr.message);
                     clearTimeout(tokenTimeout);
+                    port.removeListener('data', debugDataHandler);
                     sendStartCommand(null); // Fallback without token
+                  } else {
+                    console.log('[RECONNECT] Status query sent, waiting for response...');
                   }
                 });
                 
@@ -247,6 +259,10 @@ try {
                     // Clear reconnection state
                     uploadReconnectPending = false;
                     uploadReconnectFilename = null;
+                    
+                    // NOW resume polling after start command sent
+                    console.log('[RECONNECT] Resuming normal polling');
+                    pollPaused = false;
                   });
                 }
               }, 500); // 500ms stabilization delay as per USB capture analysis
@@ -587,11 +603,11 @@ app.post('/print', async (req, res) => {
     });
   }
   
-  // Set reconnection flag BEFORE starting upload
-  // After upload completes, printer will close port, then we auto-reconnect and send start command
-  uploadReconnectPending = true;
-  uploadReconnectFilename = uploadFilename;
-  console.log('[PRINT] Reconnection workflow enabled for:', uploadFilename);
+  // Don't set reconnection flag - let printer auto-start after file validation
+  // Official XYZ software: send file → printer validates ~1min → auto-starts
+  // uploadReconnectPending = true;
+  // uploadReconnectFilename = uploadFilename;
+  console.log('[PRINT] File will be uploaded, printer should auto-start after validation');
   console.log('[PRINT] Uploading file:', fileToUpload);
   
   // Start upload (will trigger: upload → taginfo → port close → reconnect → start command)

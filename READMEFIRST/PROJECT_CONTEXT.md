@@ -32,6 +32,198 @@
 > - Current state
 > ```
 
+## 🔥 CURRENT STATUS - Session 2026-02-03 Late Night
+
+**MAJOR DISCOVERY: CRC32 Block Checksums Required**
+
+### What We Found Today
+
+Deep analysis of USB captures comparing official XYZ software with our implementation revealed the CRITICAL missing piece:
+
+**Block Trailer is NOT `0x00000000` - it's a CRC32 checksum!**
+
+### Technical Breakthrough
+
+**USB Capture Analysis Results:**
+```
+Block 0 (8192 bytes):
+  - Our code sent: [Index][Size][Data][0x00000000]
+  - Official sends: [Index][Size][Data][0x1cc4119a] ← CRC32!
+  
+Block 45 (3472 bytes):
+  - Our code sent: [Index][Size][Data][0x00000000]  
+  - Official sends: [Index][Size][Data][0x19415b5e] ← CRC32!
+```
+
+**Verification:**
+- Calculated CRC32 of first 8KB block from AstroKe.3w = `0x1cc4119a`
+- Matches USB capture EXACTLY!
+- Formula: `zlib.crc32(blockData)` in BIG ENDIAN format
+
+### Fixes Implemented This Session
+
+#### 1. ✅ CRC32 Block Checksums
+**File:** `lib/upload_xyz_v3.js`
+```javascript
+const zlib = require('zlib');
+// For each block:
+const crc32 = zlib.crc32(data) >>> 0;  // Unsigned 32-bit
+frame.writeUInt32BE(crc32, 8 + bytesRead);  // CRC32 trailer
+```
+
+**Correct Block Structure:**
+```
+[Block Index (4 bytes BE)]     // 0, 1, 2, ... 45
+[Block Size (4 bytes BE)]       // 8192 or less for last block
+[Block Data (N bytes)]          // Actual file data
+[CRC32 Checksum (4 bytes BE)]   // zlib.crc32() of block data
+```
+
+#### 2. ✅ Parser Serial Number Bug Fix
+**File:** `lib/parser.js`
+
+**Problem:** Dashboard showed nozzle serial (GB-0002-0000-TH-7CG-0270-227) as printer serial
+
+**Fix:** 
+- Printer serial from `i:` field → `3FNAXPUS5TH7CM0041` ✅
+- Nozzle serial from `X:` field → Stored as `nozzleSerial` (not `serialNumber`)
+
+### Current Status: STILL BLOCKED 🔴
+
+**Symptoms:**
+- ✅ All 46 blocks upload successfully with CRC32 checksums
+- ✅ Each block gets "ok" response from printer
+- ✅ Upload reaches 100% completion
+- ❌ Printer stays blinking GREEN indefinitely (validation mode)
+- ❌ Never transitions to AMBER (printing mode)
+- ❌ Appears frozen in validation state
+
+**What We've Tried:**
+
+| Approach | Result | Notes |
+|----------|--------|-------|
+| Binary end markers | ❌ Failed | Not part of protocol |
+| `0x00000000` trailers | ❌ Failed | Wrong - should be CRC32 |
+| CRC32 trailers | ⏳ Testing | Correct format but still stuck |
+| Heartbeat during upload | ❌ Removed | Caused Block 5 failures |
+| `uploadDidFinish` command | ❌ Removed | Official software may not use it |
+| Filename verification | ❌ Removed | Printer shows previous name |
+| Port reconnection | ❌ Disabled | No token received |
+
+### miniMover Source Code Analysis
+
+**Key Finding from `/tmp/miniMover/miniMoverLib/xyzv3.cpp`:**
+
+Line 2863-2866:
+```cpp
+bool success = 
+    m_useV2Protocol ||  // Skip if V2
+    (serialSendMessage("XYZv3/uploadDidFinish") &&
+     waitForConfigOK());
+```
+
+**Important:** miniMover DOES send `uploadDidFinish` for V3 protocol (comV3:1)!
+
+However:
+- miniMover converts .3w → gcode before sending (we send encrypted .3w)
+- miniMover print attempts fail with "Unsupported file version" error
+- Our approach (encrypted .3w) matches official software better
+
+### What We Know Works (Official XYZ Software)
+
+From USB capture analysis:
+1. Sends encrypted .3w file directly (no gcode conversion)
+2. Uses 8KB blocks with BIG ENDIAN headers
+3. Each block has CRC32 checksum trailer
+4. Printer receives all blocks, validates (~1min green blink), then starts (amber)
+
+### Outstanding Questions
+
+1. **What triggers auto-start?** 
+   - Upload complete ✅
+   - CRC32 validates ✅
+   - But printer stuck in validation forever
+   
+2. **Is there a missing command after last block?**
+   - uploadDidFinish? (we removed it)
+   - Port operations? (DTR/RTS signals?)
+   - Timing delay?
+
+3. **USB Capture Shows:**
+   - After last block: Handflow settings, baud rate, RTS/DTR signals
+   - Then status queries: `XYZv3/query=a`, `XYZv3/config=taginfo`
+   - But these are AFTER upload in our timeline too
+
+### Files Modified This Session
+
+- ✅ `lib/upload_xyz_v3.js` - Added CRC32 checksum calculation (line 7, ~305)
+- ✅ `lib/parser.js` - Fixed serial number extraction (line 80)
+- ✅ `READMEFIRST/PROJECT_CONTEXT.md` - This update
+
+### Next Steps for Next Agent
+
+**PRIORITY 1: Investigate uploadDidFinish**
+- We removed it earlier based on assumption
+- miniMover source shows it IS used for V3 protocol
+- Try re-adding: `await this.sendCommand('XYZv3/uploadDidFinish', 10000);`
+- Monitor for printer response
+
+**PRIORITY 2: Analyze USB Capture Post-Upload**
+```bash
+# Find what happens IMMEDIATELY after block 45 trailer
+cd SampleUSBDataStream
+python3 << 'EOF'
+with open('Raw_print_stream_.3wfile.raw', 'rb') as f:
+    data = f.read()
+    # Find block 45, go to end, see next 1KB
+    pos = data.find(b'\x00\x00\x00\x2D')  # Block 45
+    # Skip to after trailer, dump next commands
+EOF
+```
+
+**PRIORITY 3: Try DTR/RTS Signal Toggle**
+- USB capture shows `IOCTL_SERIAL_SET_RTS` and `IOCTL_SERIAL_CLR_DTR`
+- May be required to signal "upload complete"
+- Node.js serialport supports: `port.set({dtr: false, rts: true})`
+
+**PRIORITY 4: Verify File Format**
+- Test with official XYZ-generated .3w file
+- Our test files from 2019 may have format issues
+- Printer expects specific header/version
+
+### Testing Artifacts
+
+- **Test File:** `uploads/AstroKe.3w` (372,112 bytes, 46 blocks)
+- **USB Capture:** `SampleUSBDataStream/Raw_print_stream_.3wfile.raw` (1,038,947 bytes)
+- **miniMover Binary:** `/home/maker2/Minimover-XYZ-printer-Dashboard/minimover`
+- **Printer:** daVinci Nano (dv1NX0A000), Firmware 3.2.0, comV3:1
+
+### Success Criteria
+
+When working correctly, printer should:
+1. Receive all blocks (blinking GREEN) ✅ Working
+2. Validate file (~1 minute, steady GREEN blink) ❌ Stuck here
+3. Auto-start printing (LED changes to AMBER) ❌ Never happens
+4. Extrude material, move print head ❌ Never reached
+
+**Current blocker:** Step 2→3 transition never occurs
+5. LED sequence: IDLE → BLINKING GREEN (receiving) → GREEN (~1min validating) → AMBER (printing)
+
+---
+
+## 🔥 PREVIOUS SESSION - 2026-02-03 Evening (SUPERSEDED)
+
+**PROBLEM IDENTIFIED:**  
+After uploading .3w files, printer LED goes RED (send error) instead of BLINKING GREEN (receiving mode). Upload completes 100% but printer times out waiting for missing signal.
+
+**ROOT CAUSE (INCORRECT - SEE ABOVE):**  
+Initially thought missing END OF TRANSFER marker. Actually missing: heartbeat, reconnection, start command.
+
+**FIX APPLIED:**  
+Complete protocol overhaul based on USB capture analysis. See above section for details.
+
+---
+
 ## Project Overview
 Node.js/Express web dashboard for controlling a Minimover XYZ 3D printer via serial connection (XYZv3 protocol). Runs on Raspberry Pi with mjpg-streamer for camera monitoring. Target resolution: 1024x720.
 
@@ -692,6 +884,47 @@ Serial closed
   - `TextStream_3Dprinter_.3wfile.txt` (25MB, 176,157 lines)
   - `Raw_print_stream_.3wfile.raw` (1MB binary, different session)
 - Based on miniMover protocol analysis
+
+---
+
+### Session 2026-02-03 Evening - CRITICAL FIX: End-of-Transfer Marker
+
+**Problem Identified:**
+- Upload completes 100% but printer LED goes RED (send error/parse error)
+- Printer should blink GREEN (receiving mode) but times out instead
+- Debug showed: all 38 blocks sent successfully, but taginfo never returned
+- Printer was waiting for something we weren't sending
+
+**Root Cause Discovered:**
+- **Missing END OF TRANSFER marker** after final data block
+- Printer protocol requires terminator frame with index `0xFFFFFFFF` to signal "transfer complete"
+- Without this marker, printer waits indefinitely, then times out with error state
+
+**Fix Implemented:**
+Modified `lib/upload_xyz_v3.js` to send end-of-transfer frame after block loop:
+```javascript
+// Send END OF TRANSFER marker (critical!)
+const endFrame = Buffer.alloc(12);  // 4b index + 4b size + 4b trailer
+endFrame.writeUInt32LE(0xFFFFFFFF, 0);  // Special index -1 = end marker  
+endFrame.writeUInt32LE(0, 4);            // Size = 0
+endFrame.writeUInt32LE(0xFFFFFFFF ^ 0x5A5AA5A5, 8);  // Trailer (XOR with magic)
+port.write(endFrame);
+```
+
+**Files Modified:**
+- `lib/upload_xyz_v3.js` - Added end-of-transfer marker after block transmission loop
+- `READMEFIRST/PROJECT_CONTEXT.md` - Added critical fix notice and session entry
+
+**Testing Status:**
+- ⏳ Server restarted with fix, ready for testing
+- Expected behavior: Printer receives end marker → processes file → sends taginfo confirmation
+- Should now see GREEN blinking (receiving) instead of RED (error)
+
+**Technical Notes:**
+- End marker uses special index `0xFFFFFFFF` (all bits set = -1 as signed int)
+- Size field = 0 (no data in this frame)
+- Trailer calculated same way as data blocks: `index XOR 0x5A5AA5A5`
+- Critical for printer to know "no more blocks coming, start processing"
 
 ---
 
